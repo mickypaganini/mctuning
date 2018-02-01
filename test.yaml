@@ -1,0 +1,31 @@
+# Example configuration for Pythia in YAML.
+
+Beams:eCM: 13000
+Next:numberShowInfo: 0
+Next:numberShowEvent: 0
+Next:numberShowLHA: 0
+Next:numberShowProcess: 0
+Next:numberCount: 0
+HardQCD:all: on
+PhaseSpace:pTHatMin: 500
+PhaseSpace:pTHatMax: 1000
+UncertaintyBands:doVariations: on
+UncertaintyBands:List:
+  fsr05:
+    fsr:muRfac: 0.5
+  fsr07:
+    fsr:muRfac: 0.7
+  fsr09:
+    fsr:muRfac: 0.9
+  fsr11:
+    fsr:muRfac: 1.1
+  fsr13:
+    fsr:muRfac: 1.3
+  fsr15:
+    fsr:muRfac: 1.5
+  fsr17:
+    fsr:muRfac: 1.7
+  fsr19:
+    fsr:muRfac: 1.9
+  fsr20:
+    fsr:muRfac: 2.0
