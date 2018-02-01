@@ -13,11 +13,17 @@ import numpy as np
 import operator
 import os
 import cPickle as pickle
+import logging
 
 from pyjet import cluster
 from numpythia import Pythia, STATUS, HAS_END_VERTEX, ABS_PDG_ID
 
+from utils import configure_logging
 from pythiaconf import read_pythia_from_yaml, create_dataset_hash
+
+# logging
+configure_logging()
+logger = logging.getLogger("Data Preparation")
 
 def _properties(constituents):
     '''
@@ -189,6 +195,7 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         raise ValueError('Requested variation not in ' + config)
 
     def _load_data(sample, nevents):
+        logger.debug('Loading {} set'.format(sample))
         dataset_string = 'dataset_' + sample + '_' + create_dataset_hash(cfg,
         extra_args={
             'nevents': nevents,
@@ -208,4 +215,3 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
                     num_workers=4)
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest)
-

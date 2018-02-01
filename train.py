@@ -1,11 +1,23 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+'''
+File: train.py
+Author: Michela Paganini (michela.paganini@yale.edu)
+'''
 import torch
 from torch import nn
 from torch import optim
 from torch.autograd import Variable
 import numpy as np
+import logging
 
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
+from utils import configure_logging
+
+# logging
+configure_logging()
+logger = logging.getLogger("Main")
 
 def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
     
@@ -120,14 +132,13 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                 batch_weighted_loss_baseline_epoch += batch_weighted_loss_baseline_i
                 batch_weighted_loss_variation_epoch += batch_weighted_loss_variation_i
                 
-
-            print 'Epoch {}: Loss Baseline = {:0.5f}; Loss {} = {:0.5f}; Total = {:0.5f}'.format(
+            logger.info('Epoch {}: Loss Baseline = {:0.5f}; Loss {} = {:0.5f}; Total = {:0.5f}'.format(
                 epoch,
                 batch_weighted_loss_baseline_epoch.data[0] / n_training,
                 variation,
                 batch_weighted_loss_variation_epoch.data[0] / n_training,
                 (batch_weighted_loss_baseline_epoch.data[0] + batch_weighted_loss_variation_epoch.data[0]) / (2 * n_training)
-            )
+            ))
             
             # validate
             model.eval()
@@ -139,25 +150,25 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
 
             loss_val /= n_validation
             loss_val = float(loss_val)
-            print 'Epoch {}: Validation Loss = {:0.5f}'.format(epoch, loss_val)
+            logger.info('Epoch {}: Validation Loss = {:0.5f}'.format(epoch, loss_val))
 
             # early stopping
             if loss_val < best_loss:
-                print 'Validation loss improved from {:0.5f} to {:0.5f}'.format(best_loss, loss_val)
+                logger.info('Validation loss improved from {:0.5f} to {:0.5f}'.format(best_loss, loss_val))
                 best_loss = loss_val
                 wait = 0
-                print 'Saving checkpoint at ' + checkpoint_path
+                logger.info('Saving checkpoint at ' + checkpoint_path)
                 torch.save(model.state_dict(), checkpoint_path)
 
             else:
                 wait += 1
                 if wait >= patience - 1:
-                    print 'Stopping early.'
+                    logger.info('Stopping early.')
                     break
     except KeyboardInterrupt:
-        print 'Training ended early.'
+        logger.info('Training ended early.')
         
-    print 'Restoring best weights from checkpoint at ' + checkpoint_path
+    logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path))
 
 
@@ -189,6 +200,7 @@ if __name__ == '__main__':
         raise ValueError('--model can only be one of ["rnn", "ntrack"]')
 
     # load or make data
+    logger.debug('Loading data')
     dataloader, dataloader_val, dataloader_test = load_data(
         args.config,
         args.variation,
@@ -210,12 +222,12 @@ if __name__ == '__main__':
                         batch_size=args.batchsize,
                         tagger_output_size=1
         )
-
         optimizer = optim.SGD(model.parameters(), lr=args.lr)
     else:
         model = NTrackModel(input_size=2)
         optimizer = optim.SGD(model.parameters(), lr=args.lr)
 
+    logger.debug('Model: {}'.format(model))
     train(model,
         optimizer,
         args.variation,
