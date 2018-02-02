@@ -255,6 +255,8 @@ if __name__ == '__main__':
     plotting.plot_jetn_trkn(
         dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset,
         args.variation, jetn=1, trkn=0)
+    plotting.plot_ntrack(
+        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset, args.variation)
 
     # initialize model
     if args.model == 'rnn': 
