@@ -1,4 +1,6 @@
 import logging
+from os import makedirs
+from errno import EEXIST
 
 def configure_logging():
     logger = logging.getLogger()
@@ -8,3 +10,14 @@ def configure_logging():
     logging.addLevelName(logging.ERROR, "\033[1;35m{:8}\033[1;0m".format(logging.getLevelName(logging.ERROR)))
     logging.addLevelName(logging.INFO, "\033[1;32m{:8}\033[1;0m".format(logging.getLevelName(logging.INFO)))
     logging.addLevelName(logging.DEBUG, "\033[1;34m{:8}\033[1;0m".format(logging.getLevelName(logging.DEBUG)))
+
+def safe_mkdir(path):
+    '''
+    Safe mkdir (i.e., don't create if already exists, 
+    and no violation of race conditions)
+    '''
+    try:
+        makedirs(path)
+    except OSError as exception:
+        if exception.errno != EEXIST:
+            raise exception

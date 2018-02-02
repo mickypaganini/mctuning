@@ -15,6 +15,7 @@ import sys
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
 from utils import configure_logging
+import plotting
 
 # logging
 configure_logging()
@@ -244,6 +245,15 @@ if __name__ == '__main__':
         args.min_lead_pt,
         args.batchsize
     )
+
+    # data inspection
+    logger.debug('Plotting distributions')
+    plotting.plot_jetn_trkn(
+        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset,
+        args.variation, jetn=0, trkn=0)
+    plotting.plot_jetn_trkn(
+        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset,
+        args.variation, jetn=1, trkn=0)
 
     # initialize model
     if args.model == 'rnn': 
