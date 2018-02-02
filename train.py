@@ -10,6 +10,7 @@ from torch import optim
 from torch.autograd import Variable
 import numpy as np
 import logging
+import sys
 
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
@@ -19,25 +20,32 @@ from utils import configure_logging
 configure_logging()
 logger = logging.getLogger("Main")
 
+customFloatTensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+
 def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
-    
+    #weights
     weights = data[name_weights].type(torch.FloatTensor)
     batch_size = weights.shape[0]
     batch_weights = Variable(
             weights.resize_(1, batch_size),
             requires_grad=False) / torch.sum(weights) # normalized
+    if torch.cuda.is_available():
+        batch_weights = batch_weights.cuda()
+
+    # loss 
+    loss_function = nn.BCEWithLogitsLoss() #weight=batch_weights)
+    if torch.cuda.is_available():
+        loss_function = nn.BCEWithLogitsLoss().cuda()
 
     if isinstance(model, NTrackModel):
-        inputs = Variable(data['nparticles'].type(torch.FloatTensor), requires_grad=False) # B x 2
-
+        inputs = Variable(data['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
         optimizer.zero_grad()
         predictions = model(inputs, batch_weights, batch_size)
 
-    elif isinstance(model, DoubleLSTM):
-        leading_input = Variable(data['leading_jet'].type(torch.FloatTensor), requires_grad=False)
-        subleading_input = Variable(data['subleading_jet'].type(torch.FloatTensor), requires_grad=False)
+    elif isinstance(model, DoubleLSTM):  
+        leading_input = Variable(data['leading_jet'].type(customFloatTensor), requires_grad=False)
+        subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), requires_grad=False)
         unsorted_lengths = data['unsorted_lengths'].numpy()
-
         optimizer.zero_grad()
         predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)
     else:
@@ -47,21 +55,24 @@ def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
         targets = Variable(torch.zeros((batch_size, 1)), requires_grad=False)
     else:
         targets = Variable(torch.ones((batch_size, 1)), requires_grad=False)
+
+    if torch.cuda.is_available():
+        targets = targets.cuda()
         
-    loss_function = nn.BCEWithLogitsLoss() #weight=batch_weights)
     loss = loss_function(predictions, targets)
     loss.backward()
     optimizer.step()
     
     batch_weighted_loss = loss * batch_size # to compute per epoch loss
 
-    return batch_weighted_loss
+    return batch_weighted_loss.data[0]
 
 
 def validate_on_batch(model, data_val, variation, loss_function):
 
-    weights_baseline = data_val['weights_Baseline'].type(torch.FloatTensor)
-    weights_variation = data_val['weights_' + variation].type(torch.FloatTensor)
+    weights_baseline = data_val['weights_Baseline'].type(customFloatTensor)
+    weights_variation = data_val['weights_' + variation].type(customFloatTensor)
+
     batch_size = weights_baseline.shape[0]
 
     batch_weights_baseline = Variable(
@@ -73,13 +84,13 @@ def validate_on_batch(model, data_val, variation, loss_function):
             requires_grad=False, volatile=True) / torch.sum(weights_variation) # normalized
 
     if isinstance(model, NTrackModel):
-        inputs = Variable(data_val['nparticles'].type(torch.FloatTensor), requires_grad=False) # B x 2
+        inputs = Variable(data_val['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
         pred_baseline_val = model(inputs, batch_weights_baseline, batch_size)#)#.data.numpy()
         pred_variation_val = model(inputs, batch_weights_variation, batch_size)#)#.data.numpy()
 
     elif isinstance(model, DoubleLSTM):
-        leading_input = Variable(data_val['leading_jet'].type(torch.FloatTensor), volatile=True)
-        subleading_input = Variable(data_val['subleading_jet'].type(torch.FloatTensor), volatile=True)
+        leading_input = Variable(data_val['leading_jet'].type(customFloatTensor), volatile=True)
+        subleading_input = Variable(data_val['subleading_jet'].type(customFloatTensor), volatile=True)
         unsorted_lengths = data_val['unsorted_lengths'].numpy()
 
         pred_baseline_val = model(leading_input, subleading_input, unsorted_lengths, batch_weights_baseline, batch_size)#)#.data.numpy()
@@ -88,13 +99,18 @@ def validate_on_batch(model, data_val, variation, loss_function):
     else:
         raise TypeError
     
-    targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True)
-    targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True)
+    if torch.cuda.is_available():
+        targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True).cuda()
+        targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True).cuda()
+    else:
+        targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True)
+        targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True)
+
 
     loss_val_increment = batch_size * (
         loss_function(pred_baseline_val, targets_baseline) + loss_function(pred_variation_val, targets_variation)
         ) / 2.
-    return loss_val_increment
+    return loss_val_increment.data[0]
 
 
 def train(model, optimizer, variation, train_data, validation_data, checkpoint_path, epochs=100, patience=5):
@@ -119,6 +135,7 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
             batch_weighted_loss_variation_epoch = 0
             
             for batch_idx, data in enumerate(train_data):
+                this_batch_size = len(data['weights_Baseline'])
                 
                 batch_weighted_loss_baseline_i = train_on_batch(
                     model, optimizer, epoch, batch_idx, data, 'weights_Baseline'
@@ -127,23 +144,39 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                 batch_weighted_loss_variation_i = train_on_batch(
                     model, optimizer, epoch, batch_idx, data, 'weights_' + variation
                 )
+
+                if batch_idx % 1 == 0:
+                    logger.debug('Epoch: {} [{}/{} ({}%)]; Loss: Baseline = {:0.3f}, {} = {:0.3f}, Total = {:0.5f}'.format(
+                        epoch,
+                        train_data.batch_size * batch_idx + this_batch_size,
+                        len(train_data.dataset),
+                        100 * (train_data.batch_size * batch_idx + this_batch_size) / len(train_data.dataset),
+                        batch_weighted_loss_baseline_i / this_batch_size,
+                        variation,
+                        batch_weighted_loss_variation_i / this_batch_size,
+                        (batch_weighted_loss_baseline_i + batch_weighted_loss_variation_i) / (2 * this_batch_size)
+                    ))
                 
                 # accumulate per-epoch loss
                 batch_weighted_loss_baseline_epoch += batch_weighted_loss_baseline_i
                 batch_weighted_loss_variation_epoch += batch_weighted_loss_variation_i
+                torch.cuda.empty_cache()
                 
             logger.info('Epoch {}: Loss Baseline = {:0.5f}; Loss {} = {:0.5f}; Total = {:0.5f}'.format(
                 epoch,
-                batch_weighted_loss_baseline_epoch.data[0] / n_training,
+                batch_weighted_loss_baseline_epoch / n_training,
                 variation,
-                batch_weighted_loss_variation_epoch.data[0] / n_training,
-                (batch_weighted_loss_baseline_epoch.data[0] + batch_weighted_loss_variation_epoch.data[0]) / (2 * n_training)
+                batch_weighted_loss_variation_epoch / n_training,
+                (batch_weighted_loss_baseline_epoch + batch_weighted_loss_variation_epoch) / (2 * n_training)
             ))
             
             # validate
             model.eval()
             loss_val = 0
-            loss_function = nn.BCEWithLogitsLoss()
+            if torch.cuda.is_available():
+                loss_function = nn.BCEWithLogitsLoss().cuda()
+            else:
+                loss_function = nn.BCEWithLogitsLoss()
             
             for batch_idx_val, data_val in enumerate(validation_data):
                 loss_val += validate_on_batch(model, data_val, variation, loss_function)
@@ -190,7 +223,7 @@ if __name__ == '__main__':
     parser.add_argument('--batchsize', type=int, default=1024)
     parser.add_argument('--nepochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=5)
-    parser.add_argument('--lr', type=int, default=0.01)
+    parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--model', type=str, default='rnn', help='Either rnn or ntrack')
     parser.add_argument('--checkpoint', type=str, default='checkpoint')
     args = parser.parse_args()
@@ -222,10 +255,14 @@ if __name__ == '__main__':
                         batch_size=args.batchsize,
                         tagger_output_size=1
         )
-        optimizer = optim.SGD(model.parameters(), lr=args.lr)
     else:
         model = NTrackModel(input_size=2)
-        optimizer = optim.SGD(model.parameters(), lr=args.lr)
+
+    if torch.cuda.is_available():
+        model.cuda()
+        logger.info('Running on GPU')
+        
+    optimizer = optim.SGD(model.parameters(), lr=args.lr)
 
     logger.debug('Model: {}'.format(model))
     train(model,

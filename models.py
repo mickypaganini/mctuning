@@ -40,8 +40,8 @@ class NTrackModel(nn.Module):
         
         weighted_mult = batch_weights.transpose(0, 1).expand(-1, hidden.shape[-1]) * hidden
         std = torch.std(weighted_mult, 0).expand(batch_size, -1)
-        
-        batch_features = torch.cat([batch_features, std], 1)# maxpool, minpool, avgpool], 1)
+
+        batch_features = torch.cat([batch_features, std], 1)         
         outputs = self.dense3(
 #             self.dropout2(
 #                 F.relu(
@@ -84,7 +84,18 @@ class DoubleLSTM(nn.Module):
         '''
         Initialize LSTM hidden states to zero at the beginning of each new sequence
         '''
-        return (Variable(torch.zeros(
+        if torch.cuda.is_available():
+            return (Variable(torch.zeros(
+                    self.num_layers * self.num_directions,
+                    batch_size, 
+                    self.output_size).cuda(), requires_grad=False),
+                Variable(torch.zeros(
+                    self.num_layers * self.num_directions,
+                    batch_size,
+                    self.output_size).cuda(), requires_grad=False)
+               )
+        else:
+            return (Variable(torch.zeros(
                     self.num_layers * self.num_directions,
                     batch_size, 
                     self.output_size), requires_grad=False),
@@ -93,10 +104,6 @@ class DoubleLSTM(nn.Module):
                     batch_size,
                     self.output_size), requires_grad=False)
                )
-    
-    def init_batch_dense(self, batch_size):
-        a = torch.Tensor(1, batch_size)
-        return torch.nn.init.normal(a)
 
     def forward(self, leading_jets, subleading_jets, lengths, batch_weights, batch_size):
                 
@@ -111,13 +118,18 @@ class DoubleLSTM(nn.Module):
         sortback_leading = np.argsort([np.argsort(lengths[:, 0])[::-1]])[0]
         sortback_subleading = np.argsort([np.argsort(lengths[:, 1])[::-1]])[0]
 
+        if torch.cuda.is_available():
+            leading_jets.cuda()
+            subleading_jets.cuda()
+
         # pack sequences
         packed_leading_jets = nn.utils.rnn.pack_padded_sequence(
             leading_jets, batch_first=True, lengths=sorted_lengths[:, 0]
         )
         packed_subleading_jets = nn.utils.rnn.pack_padded_sequence(
             subleading_jets, batch_first=True, lengths=sorted_lengths[:, 1]
-        )   
+        )
+
         # LSTMs
         lstm_lead_out, _ = self.lstm_lead(
             packed_leading_jets, hidden_lead)
@@ -125,25 +137,29 @@ class DoubleLSTM(nn.Module):
             packed_subleading_jets, hidden_sublead)
                
         # unpack sequences
-        lstm_lead_out_1, _ = pad_packed_sequence(lstm_lead_out, batch_first=True)
-        lstm_sublead_out_1, _ = pad_packed_sequence(lstm_sublead_out, batch_first=True)
+        lstm_lead_out, _ = pad_packed_sequence(lstm_lead_out, batch_first=True)
+        lstm_sublead_out, _ = pad_packed_sequence(lstm_sublead_out, batch_first=True)
 
         # sort back
-        lstm_lead_out_2 = lstm_lead_out_1[sortback_leading]
-        lstm_sublead_out_2 = lstm_sublead_out_1[sortback_subleading]
+        lstm_lead_out = lstm_lead_out[sortback_leading]
+        lstm_sublead_out = lstm_sublead_out[sortback_subleading]
         
         # return output of last timestep (not full sequence)
+        if torch.cuda.is_available():
+            lead_len = torch.from_numpy(lengths[:, 0] - 1).type(torch.cuda.LongTensor)
+            sublead_len = torch.from_numpy(lengths[:, 1] - 1).type(torch.cuda.LongTensor)
+        else:
+            lead_len = torch.from_numpy(lengths[:, 0] - 1).type(torch.LongTensor)
+            sublead_len = torch.from_numpy(lengths[:, 1] - 1).type(torch.LongTensor)
         idx_lead = Variable(
-            torch.from_numpy(lengths[:, 0] - 1).type(torch.LongTensor),
-            requires_grad=False).view(-1, 1).expand(lstm_lead_out_2.size(0), lstm_lead_out_2.size(2)).unsqueeze(1)
-        lstm_lead_out_3 = lstm_lead_out_2.gather(1, idx_lead).squeeze()
+            lead_len, requires_grad=False).view(-1, 1).expand(lstm_lead_out.size(0), lstm_lead_out.size(2)).unsqueeze(1)
+        lstm_lead_out = lstm_lead_out.gather(1, idx_lead).squeeze()
         idx_sublead = Variable(
-            torch.from_numpy(lengths[:, 1] - 1).type(torch.LongTensor),
-            requires_grad=False).view(-1, 1).expand(lstm_sublead_out_2.size(0), lstm_sublead_out_2.size(2)).unsqueeze(1)
-        lstm_sublead_out_3 = lstm_sublead_out_2.gather(1, idx_sublead).squeeze()
+            sublead_len, requires_grad=False).view(-1, 1).expand(lstm_sublead_out.size(0), lstm_sublead_out.size(2)).unsqueeze(1)
+        lstm_sublead_out = lstm_sublead_out.gather(1, idx_sublead).squeeze()
         
         # concatenate outputs of the 2 LSTMs
-        merge = torch.cat([lstm_lead_out_3, lstm_sublead_out_3], 1)
+        merge = torch.cat([lstm_lead_out, lstm_sublead_out], 1)
 
         batch_features = batch_weights.mm(merge).expand(batch_size, merge.shape[-1])
         

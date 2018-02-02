@@ -212,6 +212,7 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=shuffle,
-                    num_workers=4)
+                    num_workers=4,
+                    pin_memory=True) # for GPU
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest)
