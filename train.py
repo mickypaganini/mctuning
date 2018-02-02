@@ -161,7 +161,8 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                 # accumulate per-epoch loss
                 batch_weighted_loss_baseline_epoch += batch_weighted_loss_baseline_i
                 batch_weighted_loss_variation_epoch += batch_weighted_loss_variation_i
-                torch.cuda.empty_cache()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 
             logger.info('Epoch {}: Loss Baseline = {:0.5f}; Loss {} = {:0.5f}; Total = {:0.5f}'.format(
                 epoch,

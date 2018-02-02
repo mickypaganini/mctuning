@@ -8,6 +8,7 @@ Description: Generate Pythia events from input specification,
 Author: Michela Paganini (michela.paganini@yale.edu)
 '''
 
+import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import operator
@@ -209,10 +210,11 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             d = DijetDataset(temp_filepath, nevents=nevents, max_len=maxlen, min_lead_pt=min_lead_pt)
             pickle.dump(d, open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
         shuffle = True if sample =='train' else False
+        pin_memory = True if torch.cuda.is_available() else False
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=shuffle,
                     num_workers=4,
-                    pin_memory=True) # for GPU
+                    pin_memory=pin_memory) # for GPU
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest)
