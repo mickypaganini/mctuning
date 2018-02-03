@@ -209,11 +209,11 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         else:
             d = DijetDataset(temp_filepath, nevents=nevents, max_len=maxlen, min_lead_pt=min_lead_pt)
             pickle.dump(d, open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
-        shuffle = True if sample =='train' else False
+        # shuffle = True if sample =='train' else False
         pin_memory = True if torch.cuda.is_available() else False
         return DataLoader(d,
                     batch_size=batch_size,
-                    shuffle=shuffle,
+                    shuffle=True,
                     num_workers=4,
                     pin_memory=pin_memory) # for GPU
 

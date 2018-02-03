@@ -8,9 +8,11 @@ import torch
 from torch import nn
 from torch import optim
 from torch.autograd import Variable
+import torch.nn.functional as F
 import numpy as np
 import logging
 import sys
+from sklearn.metrics import roc_auc_score
 
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
@@ -69,10 +71,15 @@ def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
     return batch_weighted_loss.data[0]
 
 
-def validate_on_batch(model, data_val, variation, loss_function):
+def predict(model, data, variation, loss_function):
+    '''
+    Raises:
+    -------
+        TypeError
+    '''
 
-    weights_baseline = data_val['weights_Baseline'].type(customFloatTensor)
-    weights_variation = data_val['weights_' + variation].type(customFloatTensor)
+    weights_baseline = data['weights_Baseline'].type(customFloatTensor)
+    weights_variation = data['weights_' + variation].type(customFloatTensor)
 
     batch_size = weights_baseline.shape[0]
 
@@ -85,21 +92,29 @@ def validate_on_batch(model, data_val, variation, loss_function):
             requires_grad=False, volatile=True) / torch.sum(weights_variation) # normalized
 
     if isinstance(model, NTrackModel):
-        inputs = Variable(data_val['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
-        pred_baseline_val = model(inputs, batch_weights_baseline, batch_size)#)#.data.numpy()
-        pred_variation_val = model(inputs, batch_weights_variation, batch_size)#)#.data.numpy()
+        inputs = Variable(data['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
+        pred_baseline = model(inputs, batch_weights_baseline, batch_size)#)#.data.numpy()
+        pred_variation = model(inputs, batch_weights_variation, batch_size)#)#.data.numpy()
 
     elif isinstance(model, DoubleLSTM):
-        leading_input = Variable(data_val['leading_jet'].type(customFloatTensor), volatile=True)
-        subleading_input = Variable(data_val['subleading_jet'].type(customFloatTensor), volatile=True)
-        unsorted_lengths = data_val['unsorted_lengths'].numpy()
+        leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=True)
+        subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=True)
+        unsorted_lengths = data['unsorted_lengths'].numpy()
 
-        pred_baseline_val = model(leading_input, subleading_input, unsorted_lengths, batch_weights_baseline, batch_size)#)#.data.numpy()
-        pred_variation_val = model(leading_input, subleading_input, unsorted_lengths, batch_weights_variation, batch_size)#)#.data.numpy()
+        pred_baseline = model(leading_input, subleading_input, unsorted_lengths, batch_weights_baseline, batch_size)#)#.data.numpy()
+        pred_variation = model(leading_input, subleading_input, unsorted_lengths, batch_weights_variation, batch_size)#)#.data.numpy()
 
     else:
         raise TypeError
-    
+
+    return pred_baseline, pred_variation
+
+
+def validate_on_batch(model, data_val, variation, loss_function):
+    '''
+    '''
+    batch_size = data_val['weights_Baseline'].shape[0]
+    pred_baseline, pred_variation = predict(model, data_val, variation, loss_function)
     if torch.cuda.is_available():
         targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True).cuda()
         targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True).cuda()
@@ -108,10 +123,46 @@ def validate_on_batch(model, data_val, variation, loss_function):
         targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True)
 
 
-    loss_val_increment = batch_size * (
-        loss_function(pred_baseline_val, targets_baseline) + loss_function(pred_variation_val, targets_variation)
+    loss_increment = batch_size * (
+        loss_function(pred_baseline, targets_baseline) + loss_function(pred_variation, targets_variation)
         ) / 2.
-    return loss_val_increment.data[0]
+    return loss_increment.data[0]
+
+
+def test(model, dataloader, variation, times=2):
+    '''
+    '''
+    model.eval()
+    if torch.cuda.is_available():
+        loss_function = nn.BCEWithLogitsLoss().cuda()
+    else:
+        loss_function = nn.BCEWithLogitsLoss()
+    
+    # will be lists of lists [times x n_events]
+    pred_baseline = []
+    pred_variation = []
+    sample_weight = [] # event weights for the variation
+
+    for t in range(times): # number of independent evaluations
+        logger.debug('Test iteration number {}'.format(t))
+        # lists
+        pred_baseline_t = []
+        pred_variation_t = []
+        sample_weight_t = []
+
+        for batch_idx, data in enumerate(dataloader): # loop thru batches
+            if batch_idx % 10:
+                logger.debug('Batch {}'.format(batch_idx))
+            _pred_baseline, _pred_variation = predict(model, data, variation, loss_function)
+            pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.numpy())
+            pred_variation_t.extend(F.sigmoid(_pred_variation).data.numpy())
+            sample_weight_t.extend(data['weights_' + variation])
+
+        pred_baseline.append(pred_baseline_t)
+        pred_variation.append(pred_variation_t)
+        sample_weight.append(sample_weight_t)
+
+    return pred_baseline, pred_variation, sample_weight
 
 
 def train(model, optimizer, variation, train_data, validation_data, checkpoint_path, epochs=100, patience=5):
@@ -228,6 +279,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--model', type=str, default='rnn', help='Either rnn or ntrack')
     parser.add_argument('--checkpoint', type=str, default='checkpoint')
+    parser.add_argument('--test-iter', type=int, default=2)
+
     args = parser.parse_args()
 
     # check arguments
@@ -272,18 +325,36 @@ if __name__ == '__main__':
         model = NTrackModel(input_size=2)
 
     if torch.cuda.is_available():
-        model.cuda()
+        model.cuda() # move model to GPU
         logger.info('Running on GPU')
         
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
-
     logger.debug('Model: {}'.format(model))
+
+    checkpoint_path = args.checkpoint + '_' + args.model + '_' + args.variation + '.pth'
+
+    # train
     train(model,
         optimizer,
         args.variation,
         dataloader,
         dataloader_val,
-        checkpoint_path=args.checkpoint + '_' + args.model + '_' + args.variation + '.pth',
+        checkpoint_path=checkpoint_path,
         epochs=args.nepochs,
         patience=args.patience
     )
+
+    # test
+    logger.debug('Testing')
+    pred_baseline, pred_variation, sample_weight = test(model, dataloader_test, args.variation, times=args.test_iter)
+    # check performance
+    for t in range(args.test_iter):
+        y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_baseline[0]))))
+        y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
+        logger.debug('ROC iteration {}'.format(t))
+        logger.info(roc_auc_score(
+            y_true,
+            y_score,
+            average='weighted',
+            sample_weight=np.concatenate( (np.ones(len(pred_baseline[0])), sample_weight[t]) )
+        ))

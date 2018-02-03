@@ -1,0 +1,6 @@
+matplotlib==2.0.2
+numpy==1.13.3
+numpythia==0.3.3
+pyjet==1.0.1
+torch==0.3.0.post4
+PyYAML==3.12
