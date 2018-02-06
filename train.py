@@ -27,18 +27,16 @@ customFloatTensor = torch.cuda.FloatTensor if torch.cuda.is_available() else tor
 
 def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
     #weights
-    weights = data[name_weights].type(torch.FloatTensor)
+    weights = data[name_weights].type(customFloatTensor)
     batch_size = weights.shape[0]
     batch_weights = Variable(
             weights.resize_(1, batch_size),
             requires_grad=False) / torch.sum(weights) # normalized
-    if torch.cuda.is_available():
-        batch_weights = batch_weights.cuda()
 
     # loss 
-    loss_function = nn.BCEWithLogitsLoss() #weight=batch_weights)
-    if torch.cuda.is_available():
-        loss_function = nn.BCEWithLogitsLoss().cuda()
+    # loss_function = nn.BCEWithLogitsLoss(weight=batch_weights) 
+    # if torch.cuda.is_available():
+    #     loss_function = nn.BCEWithLogitsLoss(weight=batch_weights).cuda()
 
     if isinstance(model, NTrackModel):
         inputs = Variable(data['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
@@ -62,7 +60,7 @@ def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
     if torch.cuda.is_available():
         targets = targets.cuda()
         
-    loss = loss_function(predictions, targets)
+    loss = F.binary_cross_entropy_with_logits(predictions, targets, weight=Variable(weights, requires_grad=False))
     loss.backward()
     optimizer.step()
     
@@ -71,7 +69,7 @@ def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
     return batch_weighted_loss.data[0]
 
 
-def predict(model, data, variation, loss_function):
+def predict(model, data, variation):
     '''
     Raises:
     -------
@@ -110,11 +108,11 @@ def predict(model, data, variation, loss_function):
     return pred_baseline, pred_variation
 
 
-def validate_on_batch(model, data_val, variation, loss_function):
+def validate_on_batch(model, data_val, variation):
     '''
     '''
     batch_size = data_val['weights_Baseline'].shape[0]
-    pred_baseline, pred_variation = predict(model, data_val, variation, loss_function)
+    pred_baseline, pred_variation = predict(model, data_val, variation)
     if torch.cuda.is_available():
         targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True).cuda()
         targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True).cuda()
@@ -122,9 +120,34 @@ def validate_on_batch(model, data_val, variation, loss_function):
         targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True)
         targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True)
 
+    # print float(batch_size * (
+    #         F.binary_cross_entropy_with_logits(
+    #             pred_baseline, 
+    #             targets_baseline, 
+    #             weight=Variable(data_val['weights_Baseline'].type(customFloatTensor), requires_grad=False)) + 
+    #         F.binary_cross_entropy_with_logits(
+    #             pred_variation, 
+    #             targets_variation, 
+    #             weight=Variable(data_val['weights_' + variation].type(customFloatTensor), requires_grad=False))
+    #     ) / 2.), float(batch_size * (
+    #         F.binary_cross_entropy_with_logits(
+    #             pred_baseline, 
+    #             targets_baseline) +
+    #             F.binary_cross_entropy_with_logits(
+    #             pred_variation, 
+    #             targets_variation, 
+    #             )
+    #     ) / 2.)
 
     loss_increment = batch_size * (
-        loss_function(pred_baseline, targets_baseline) + loss_function(pred_variation, targets_variation)
+            F.binary_cross_entropy_with_logits(
+                pred_baseline, 
+                targets_baseline, 
+                weight=Variable(data_val['weights_Baseline'].type(customFloatTensor), requires_grad=False)) + 
+            F.binary_cross_entropy_with_logits(
+                pred_variation, 
+                targets_variation, 
+                weight=Variable(data_val['weights_' + variation].type(customFloatTensor), requires_grad=False))
         ) / 2.
     return loss_increment.data[0]
 
@@ -133,10 +156,10 @@ def test(model, dataloader, variation, times=2):
     '''
     '''
     model.eval()
-    if torch.cuda.is_available():
-        loss_function = nn.BCEWithLogitsLoss().cuda()
-    else:
-        loss_function = nn.BCEWithLogitsLoss()
+    # if torch.cuda.is_available():
+    #     loss_function = nn.BCEWithLogitsLoss().cuda()
+    # else:
+    #     loss_function = nn.BCEWithLogitsLoss()
     
     # will be lists of lists [times x n_events]
     pred_baseline = []
@@ -153,9 +176,13 @@ def test(model, dataloader, variation, times=2):
         for batch_idx, data in enumerate(dataloader): # loop thru batches
             if batch_idx % 10:
                 logger.debug('Batch {}'.format(batch_idx))
-            _pred_baseline, _pred_variation = predict(model, data, variation, loss_function)
-            pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.numpy())
-            pred_variation_t.extend(F.sigmoid(_pred_variation).data.numpy())
+            _pred_baseline, _pred_variation = predict(model, data, variation)
+            if torch.cuda.is_available():
+                pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.cpu().numpy())
+                pred_variation_t.extend(F.sigmoid(_pred_variation).data.cpu().numpy())
+            else:
+                pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.numpy())
+                pred_variation_t.extend(F.sigmoid(_pred_variation).data.numpy())
             sample_weight_t.extend(data['weights_' + variation])
 
         pred_baseline.append(pred_baseline_t)
@@ -226,13 +253,13 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
             # validate
             model.eval()
             loss_val = 0
-            if torch.cuda.is_available():
-                loss_function = nn.BCEWithLogitsLoss().cuda()
-            else:
-                loss_function = nn.BCEWithLogitsLoss()
+            # if torch.cuda.is_available():
+            #     loss_function = nn.BCEWithLogitsLoss().cuda()
+            # else:
+            #     loss_function = nn.BCEWithLogitsLoss()
             
             for batch_idx_val, data_val in enumerate(validation_data):
-                loss_val += validate_on_batch(model, data_val, variation, loss_function)
+                loss_val += validate_on_batch(model, data_val, variation)
 
             loss_val /= n_validation
             loss_val = float(loss_val)
