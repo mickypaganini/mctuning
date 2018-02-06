@@ -150,26 +150,45 @@ class DijetDataset(Dataset):
     '''
     Dataset of jet components for leading and subleading jet in QCD events.
     '''
-    def __init__(self, config_path, nevents=100, max_len=50, min_lead_pt=None):
-        self.nevents = nevents
-        particles, self.weights = generate_events(config_path, nevents)
-        constituents, lengths, self.nparticles, self.jetpts = get_leadingjets_constituents(
-            particles, jet_ptmin=10.0, max_len=max_len
-        )
-        self.leading_jet = np.squeeze(constituents[:, 0, :, :])
-        self.subleading_jet = np.squeeze(constituents[:, 1, :, :])
-        
-        self.lengths = lengths
-        
-        if min_lead_pt is not None:
-            self.nevents = sum(self.jetpts[:, 0] > min_lead_pt)
-            self.leading_jet = self.leading_jet[self.jetpts[:, 0] > min_lead_pt]
-            self.subleading_jet = self.subleading_jet[self.jetpts[:, 0] > min_lead_pt]
-            self.lengths = self.lengths[self.jetpts[:, 0] > min_lead_pt]
-            self.nparticles = self.nparticles[self.jetpts[:, 0] > min_lead_pt]
-            self.weights = self.weights[self.jetpts[:, 0] > min_lead_pt]
-            self.jetpts = self.jetpts[self.jetpts[:, 0] > min_lead_pt]
+    def __init__(self, config_path=None, nevents=100, max_len=50, min_lead_pt=None):
+        if config_path is not None:
+            self.nevents = nevents
+            particles, self.weights = generate_events(config_path, nevents)
+            constituents, lengths, self.nparticles, self.jetpts = get_leadingjets_constituents(
+                particles, jet_ptmin=10.0, max_len=max_len
+            )
+            self.leading_jet = np.squeeze(constituents[:, 0, :, :])
+            self.subleading_jet = np.squeeze(constituents[:, 1, :, :])
             
+            self.lengths = lengths
+            
+            if min_lead_pt is not None:
+                self.nevents = sum(self.jetpts[:, 0] > min_lead_pt)
+                self.leading_jet = self.leading_jet[self.jetpts[:, 0] > min_lead_pt]
+                self.subleading_jet = self.subleading_jet[self.jetpts[:, 0] > min_lead_pt]
+                self.lengths = self.lengths[self.jetpts[:, 0] > min_lead_pt]
+                self.nparticles = self.nparticles[self.jetpts[:, 0] > min_lead_pt]
+                self.weights = self.weights[self.jetpts[:, 0] > min_lead_pt]
+                self.jetpts = self.jetpts[self.jetpts[:, 0] > min_lead_pt]
+    
+    def to_dict(self):
+        """
+        data = DijetDataset(...)
+
+        d = data.to_dict()
+        pickle.dump(d, open(...))
+        """
+        return dict(self.__dict__)
+
+    @classmethod
+    def from_dict(cls, d):
+        """
+        d = pickle.load(open(...))
+        data = DijetDataset.from_dict(d)
+        """
+        obj = cls()
+        obj.__dict__.update(d)
+        return obj
         
     def __len__(self):
         return self.nevents
@@ -204,11 +223,14 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             'min_lead_pt': min_lead_pt
         }) + '.pkl'
 
+        # dataset_string = 'dataset_dict_' + sample + '_100k_l150.pkl' 
+
         if os.path.isfile(dataset_string):
-            d = pickle.load(open(dataset_string, 'r'))
+            dic = pickle.load(open(dataset_string, 'r'))
+            d = DijetDataset.from_dict(dic)
         else:
             d = DijetDataset(temp_filepath, nevents=nevents, max_len=maxlen, min_lead_pt=min_lead_pt)
-            pickle.dump(d, open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
         # shuffle = True if sample =='train' else False
         pin_memory = True if torch.cuda.is_available() else False
         return DataLoader(d,
