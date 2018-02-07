@@ -91,3 +91,21 @@ def plot_ntrack(d, d_val, d_test, variation):
         plt.legend(fontsize=15)
         plt.xlabel('Number of tracks')
         plt.savefig(os.path.join('plots','{}_jet{}_ntracks.pdf'.format(variation, jet)))
+
+def plot_output(pred_baseline, pred_variation, variation, weights_variation, model_name, t=''):
+    '''
+    '''
+    safe_mkdir('plots')
+    plt.figure(figsize=(8, 8))
+    min_ = min(pred_baseline.min(), pred_variation.min())
+    max_ = max(pred_baseline.max(), pred_variation.max())
+    bins=np.linspace(min_, max_, 30)
+    _ = plt.hist(pred_baseline, 
+             bins=bins, histtype='step', label=r'test - $\mu_\mathrm{FSR} = 1.0$',
+             weights=np.ones(len(pred_baseline)))
+    _ = plt.hist(pred_variation,
+             label=r'train - $\mu_\mathrm{FSR} = $' + '.'.join(list(variation.split('fsr')[-1])),
+             weights=weights_variation, bins=bins, histtype='step')
+    plt.legend(loc='upper left')
+    plt.xlabel('Weighted NN Output')
+    plt.savefig(os.path.join('plots','{}_{}_output_{}.pdf'.format(variation, model_name, t)))

@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import numpy as np
 import logging
 import sys
+import os
 from sklearn.metrics import roc_auc_score
 
 from dataprep import load_data
@@ -300,13 +301,15 @@ if __name__ == '__main__':
     parser.add_argument('--ntest', type=int, default=100000)
     parser.add_argument('--min-lead-pt', type=int, default=500)
     parser.add_argument('--config', type=str, default='test.yaml')
-    parser.add_argument('--batchsize', type=int, default=1024)
+    parser.add_argument('--batchsize', type=int, default=128)
     parser.add_argument('--nepochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--model', type=str, default='rnn', help='Either rnn or ntrack')
     parser.add_argument('--checkpoint', type=str, default='checkpoint')
     parser.add_argument('--test-iter', type=int, default=2)
+    parser.add_argument('--pretrain', action='store_true', help='Load pretrained weights')
+
 
     args = parser.parse_args()
 
@@ -359,6 +362,11 @@ if __name__ == '__main__':
     logger.debug('Model: {}'.format(model))
 
     checkpoint_path = args.checkpoint + '_' + args.model + '_' + args.variation + '.pth'
+    if args.pretrain and os.path.exists(checkpoint_path):
+        logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
+        model.load_state_dict(torch.load(checkpoint_path))
+    else:
+        logger.info('Training from scratch')
 
     # train
     train(model,
@@ -376,12 +384,15 @@ if __name__ == '__main__':
     pred_baseline, pred_variation, sample_weight = test(model, dataloader_test, args.variation, times=args.test_iter)
     # check performance
     for t in range(args.test_iter):
+        plotting.plot_output(
+            np.array(pred_baseline[t]).ravel(), np.array(pred_variation[t]).ravel(),
+            args.variation, np.array(sample_weight[t]).ravel(), args.model, t)
         y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_baseline[0]))))
         y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
         logger.debug('ROC iteration {}'.format(t))
         logger.info(roc_auc_score(
             y_true,
             y_score,
-            average='weighted',
+            # average='weighted',
             sample_weight=np.concatenate( (np.ones(len(pred_baseline[0])), sample_weight[t]) )
         ))
