@@ -34,11 +34,6 @@ def train_on_batch(model, optimizer, epoch, batch_idx, data, name_weights):
             weights.resize_(1, batch_size),
             requires_grad=False) / torch.sum(weights) # normalized
 
-    # loss 
-    # loss_function = nn.BCEWithLogitsLoss(weight=batch_weights) 
-    # if torch.cuda.is_available():
-    #     loss_function = nn.BCEWithLogitsLoss(weight=batch_weights).cuda()
-
     if isinstance(model, NTrackModel):
         inputs = Variable(data['nparticles'].type(customFloatTensor), requires_grad=False) # B x 2
         optimizer.zero_grad()
@@ -121,25 +116,6 @@ def validate_on_batch(model, data_val, variation):
         targets_baseline = Variable(torch.zeros((batch_size, 1)), requires_grad=False, volatile=True)
         targets_variation = Variable(torch.ones((batch_size, 1)), requires_grad=False, volatile=True)
 
-    # print float(batch_size * (
-    #         F.binary_cross_entropy_with_logits(
-    #             pred_baseline, 
-    #             targets_baseline, 
-    #             weight=Variable(data_val['weights_Baseline'].type(customFloatTensor), requires_grad=False)) + 
-    #         F.binary_cross_entropy_with_logits(
-    #             pred_variation, 
-    #             targets_variation, 
-    #             weight=Variable(data_val['weights_' + variation].type(customFloatTensor), requires_grad=False))
-    #     ) / 2.), float(batch_size * (
-    #         F.binary_cross_entropy_with_logits(
-    #             pred_baseline, 
-    #             targets_baseline) +
-    #             F.binary_cross_entropy_with_logits(
-    #             pred_variation, 
-    #             targets_variation, 
-    #             )
-    #     ) / 2.)
-
     loss_increment = batch_size * (
             F.binary_cross_entropy_with_logits(
                 pred_baseline, 
@@ -157,10 +133,6 @@ def test(model, dataloader, variation, times=2):
     '''
     '''
     model.eval()
-    # if torch.cuda.is_available():
-    #     loss_function = nn.BCEWithLogitsLoss().cuda()
-    # else:
-    #     loss_function = nn.BCEWithLogitsLoss()
     
     # will be lists of lists [times x n_events]
     pred_baseline = []
@@ -346,8 +318,8 @@ if __name__ == '__main__':
         model = DoubleLSTM(input_size=9,
                         output_size=32,
                         num_layers=1,
-                        dropout=0.1,
-                        bidirectional=True,
+                        dropout=0.0,
+                        bidirectional=False,
                         batch_size=args.batchsize,
                         tagger_output_size=1
         )
