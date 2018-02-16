@@ -66,6 +66,7 @@ def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, variati
         loss = compute_loss(predictions, data, batch_size, classname)
         # update weights
         loss.backward()
+        # torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
         optimizer.step()
         returns.append((batch_size * loss).data[0])
 
@@ -287,7 +288,6 @@ if __name__ == '__main__':
     parser.add_argument('--test-iter', type=int, default=2)
     parser.add_argument('--pretrain', action='store_true', help='Load pretrained weights')
 
-
     args = parser.parse_args()
 
     # check arguments
@@ -335,7 +335,7 @@ if __name__ == '__main__':
         model.cuda() # move model to GPU
         logger.info('Running on GPU')
         
-    optimizer = optim.SGD(model.parameters(), lr=args.lr)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.0)
     logger.debug('Model: {}'.format(model))
 
     checkpoint_path = args.checkpoint + '_' + args.model + '_' + args.variation + '.pth'
