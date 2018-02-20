@@ -15,6 +15,7 @@ import operator
 import os
 import cPickle as pickle
 import logging
+from joblib import Parallel, delayed
 
 from pyjet import cluster
 from numpythia import Pythia, STATUS, HAS_END_VERTEX, ABS_PDG_ID
@@ -192,6 +193,18 @@ class DijetDataset(Dataset):
         obj = cls()
         obj.__dict__.update(d)
         return obj
+
+    @staticmethod
+    def concat(sequence):
+        dicts = [d.to_dict() for d in sequence]
+        output_dict = {
+            field : np.concatenate(tuple(dic[field] for dic in dicts), axis=0)
+                for field in dicts[0].keys() if dicts[0][field].shape
+        }
+        output_dict.update({
+            field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not dicts[0][field].shape
+        })
+        return DijetDataset.from_dict(output_dict)
         
     def __len__(self):
         return self.nevents
@@ -233,15 +246,14 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             'min_lead_pt': min_lead_pt
         }) + '.pkl'
 
-        # dataset_string = 'dataset_dict_' + sample + '_100k_l150.pkl' 
-
         if os.path.isfile(dataset_string):
             dic = pickle.load(open(dataset_string, 'r'))
             d = DijetDataset.from_dict(dic)
         else:
-            d = DijetDataset(temp_filepath, nevents=nevents, max_len=maxlen, min_lead_pt=min_lead_pt)
+            dataset_list = Parallel(n_jobs=11, verbose=True)(delayed(DijetDataset)(
+                temp_filepath, nevents=nevents/10, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(10))
+            d = DijetDataset.concat(dataset_list)
             pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
-        # shuffle = True if sample =='train' else False
         pin_memory = True if torch.cuda.is_available() else False
         return DataLoader(d,
                     batch_size=batch_size,
