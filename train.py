@@ -17,7 +17,7 @@ from sklearn.metrics import roc_auc_score
 
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
-from utils import configure_logging
+from utils import configure_logging, safe_mkdir
 import plotting
 
 # logging
@@ -26,11 +26,11 @@ logger = logging.getLogger("Main")
 
 customFloatTensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
 
-def compute_loss(predictions, data, batch_size, classname):
+def compute_loss(predictions, data, batch_size, classname, classn):
     '''
     Computes the loss on a batch of examples given the model predictions
     '''
-    if classname == 'Baseline':
+    if classn == 0:
         if torch.cuda.is_available():
             targets = Variable(torch.zeros((batch_size, 1)), requires_grad=False).cuda()
         else:
@@ -48,29 +48,27 @@ def compute_loss(predictions, data, batch_size, classname):
     return loss
 
 
-def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, variation):
+def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, classname, classn):
     '''
     Notes:
         Calls predict() to get predictions
-        Calls compute_loss() to get the losses
+        Calls compute_loss() to get the loss
         Takes care of backprop and weight update
     Returns:
-        batch weighted values of baseline and variation losses
+        batch weighted loss values
     '''
-    returns = []
-    for classname in ['Baseline', variation]:
-        optimizer.zero_grad()
-        # get predictions
-        predictions = predict(model, data, batch_size, classname, volatile=False)
-        # get loss 
-        loss = compute_loss(predictions, data, batch_size, classname)
-        # update weights
-        loss.backward()
-        # torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
-        optimizer.step()
-        returns.append((batch_size * loss).data[0])
-
-    return tuple(returns) # batch weighted losses for baseline and variation
+    # for n, classname in enumerate([class0, class1]):
+    optimizer.zero_grad()
+    # get predictions
+    predictions = predict(model, data, batch_size, classname, volatile=False)
+    # get loss 
+    loss = compute_loss(predictions, data, batch_size, classname, classn)
+    # update weights
+    loss.backward()
+    # torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
+    optimizer.step()
+    return (batch_size * loss).data[0] # batch weighted loss
+    # return tuple(returns) # batch weighted losses for baseline and variation
 
 
 def predict(model, data, batch_size, classname, volatile):
@@ -107,7 +105,7 @@ def predict(model, data, batch_size, classname, volatile):
     return predictions
 
 
-def multitest(model, dataloader, variation, times=2):
+def multitest(model, dataloader_0, dataloader_1, class0, class1, times=2):
     '''
     Custom test function that calls predict() on each batch of
     `times` different datasets.
@@ -115,42 +113,68 @@ def multitest(model, dataloader, variation, times=2):
     model.eval()
     
     # will be lists of lists [times x n_events]
-    pred_baseline, pred_variation, sample_weight = [], [], []
+    pred_baseline, pred_variation, weights_baseline, weights_variation = [], [], [], []
 
     for t in range(times): # number of independent evaluations
         logger.debug('Test iteration number {}'.format(t))
 
-        pred_baseline_t, pred_variation_t, sample_weight_t = [], [], []
+        pred_baseline_t, pred_variation_t, weights_baseline_t, weights_variation_t = [], [], [], []
+        features_baseline, features_variation = [], []
 
-        for batch_idx, data in enumerate(dataloader): # loop thru batches
+        for batch_idx, (data_0, data_1) in enumerate(zip(dataloader_0, dataloader_1)): # loop thru batches
             if batch_idx % 10:
                 logger.debug('Batch {}'.format(batch_idx))
-            batch_size = len(data['weights_Baseline'])
-            _pred_baseline = predict(model, data, batch_size, 'Baseline', volatile=True)
-            _pred_variation = predict(model, data, batch_size, variation, volatile=True)
+            batch_size_0 = len(data_0['weights_' + class0])
+            batch_size_1 = len(data_1['weights_' + class1])
+
+            _pred_baseline = predict(model, data_0, batch_size_0, class0, volatile=True)
+            # accumulate hidden batch features for plotting
+            if torch.cuda.is_available():
+                features_baseline.append(model.batch_features.data.cpu().numpy())
+            else:
+                features_baseline.append(model.batch_features.data.numpy())
+
+            _pred_variation = predict(model, data_1, batch_size_1, class1, volatile=True)
+            # accumulate hidden batch features for plotting
+            if torch.cuda.is_available():
+                features_variation.append(model.batch_features.data.cpu().numpy())
+            else:
+                features_variation.append(model.batch_features.data.numpy())
+
             if torch.cuda.is_available():
                 pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.cpu().numpy())
                 pred_variation_t.extend(F.sigmoid(_pred_variation).data.cpu().numpy())
             else:
                 pred_baseline_t.extend(F.sigmoid(_pred_baseline).data.numpy())
                 pred_variation_t.extend(F.sigmoid(_pred_variation).data.numpy())
-            sample_weight_t.extend(data['weights_' + variation])
+            weights_baseline_t.extend(data_0['weights_' + class0])
+            weights_variation_t.extend(data_1['weights_' + class1])
 
         pred_baseline.append(pred_baseline_t)
         pred_variation.append(pred_variation_t)
-        sample_weight.append(sample_weight_t)
+        weights_baseline.append(weights_baseline_t)
+        weights_variation.append(weights_variation_t)
 
-    return pred_baseline, pred_variation, sample_weight
+    return pred_baseline, pred_variation, weights_baseline, weights_variation, features_baseline, features_variation
 
 
-def train(model, optimizer, variation, train_data, validation_data, checkpoint_path, epochs=100, patience=5, monitor='roc_auc'):
+def train(model,
+        optimizer,
+        class0, class1,
+        varID_0, varID_1,
+        train_data_0, train_data_1,
+        validation_data_0, validation_data_1,
+        checkpoint_path,
+        epochs=100,
+        patience=5,
+        monitor='roc_auc'):
     '''
     train_data = dataloader
     validation_data = dataloader_val
     '''
 
-    n_validation = validation_data.dataset.nevents
-    n_training = train_data.dataset.nevents
+    n_validation = min(validation_data_0.dataset.nevents, validation_data_1.dataset.nevents) 
+    n_training = min(train_data_0.dataset.nevents, train_data_1.dataset.nevents) 
     best_loss = np.inf
     best_roc = 0.
     wait = 0
@@ -165,23 +189,27 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
             batch_weighted_loss_baseline_epoch = 0
             batch_weighted_loss_variation_epoch = 0
             
-            for batch_idx, data in enumerate(train_data):
-                this_batch_size = len(data['weights_Baseline'])
+            # zipping cuts length
+            for batch_idx, (data_0, data_1) in enumerate(zip(train_data_0, train_data_1)):
+                this_batch_size_0 = len(data_0['weights_' + class0])
+                this_batch_size_1 = len(data_1['weights_' + class1])
                 
-                batch_weighted_loss_baseline_i, batch_weighted_loss_variation_i = train_on_batch(
-                    model, optimizer, epoch, batch_idx, this_batch_size, data, variation
-                )
+                batch_weighted_loss_baseline_i = train_on_batch(
+                    model, optimizer, epoch, batch_idx, this_batch_size_0, data_0, class0, classn=0)
+                batch_weighted_loss_variation_i = train_on_batch(
+                    model, optimizer, epoch, batch_idx, this_batch_size_1, data_1, class1, classn=1)
 
                 if batch_idx % 1 == 0:
-                    logger.debug('Epoch: {} [{}/{} ({}%)]; Loss: Baseline = {:0.3f}, {} = {:0.3f}, Total = {:0.5f}'.format(
+                    logger.debug('Epoch: {} [{}/{} ({}%)]; Loss: {} = {:0.3f}, {} = {:0.3f}, Total = {:0.5f}'.format(
                         epoch,
-                        train_data.batch_size * batch_idx + this_batch_size,
-                        len(train_data.dataset),
-                        100 * (train_data.batch_size * batch_idx + this_batch_size) / len(train_data.dataset),
-                        batch_weighted_loss_baseline_i / this_batch_size,
-                        variation,
-                        batch_weighted_loss_variation_i / this_batch_size,
-                        (batch_weighted_loss_baseline_i + batch_weighted_loss_variation_i) / (2 * this_batch_size)
+                        train_data_0.batch_size * batch_idx + this_batch_size_0, # approximate, only true for class0
+                        n_training,
+                        100 * (train_data_0.batch_size * batch_idx + this_batch_size_0) / n_training, # approximate, only true for class0
+                        varID_0.replace('_', ' '),
+                        batch_weighted_loss_baseline_i / this_batch_size_0,
+                        varID_1.replace('_', ' '),
+                        batch_weighted_loss_variation_i / this_batch_size_1,
+                        (batch_weighted_loss_baseline_i + batch_weighted_loss_variation_i) / (this_batch_size_0 + this_batch_size_1)
                     ))
                 
                 # accumulate per-epoch loss
@@ -190,33 +218,37 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 
-            logger.info('Epoch {}: Loss Baseline = {:0.5f}; Loss {} = {:0.5f}; Total = {:0.5f}'.format(
+            logger.info('Epoch {}: Loss {} ~ {:0.5f}; Loss {} ~ {:0.5f}; Total ~ {:0.5f}'.format(
                 epoch,
-                batch_weighted_loss_baseline_epoch / n_training,
-                variation,
-                batch_weighted_loss_variation_epoch / n_training,
-                (batch_weighted_loss_baseline_epoch + batch_weighted_loss_variation_epoch) / (2 * n_training)
+                varID_0.replace('_', ' '),
+                batch_weighted_loss_baseline_epoch / n_training, #approx
+                varID_1.replace('_', ' '),
+                batch_weighted_loss_variation_epoch / n_training, #approx
+                (batch_weighted_loss_baseline_epoch + batch_weighted_loss_variation_epoch) / (2. * n_training) #approx
             ))
             
             # validate
             model.eval()
             loss_val = 0
-            scores_baseline, scores_variation, sample_weight = [], [], []
+            scores_baseline, scores_variation, weights_baseline, weights_variation = [], [], [], []
 
-            for batch_idx_val, data_val in enumerate(validation_data):
-                batch_size = len(data_val['weights_Baseline'])
+            for batch_idx_val, (data_val_0, data_val_1) in enumerate(zip(validation_data_0, validation_data_1)):
+                batch_size_0 = len(data_val_0['weights_' + class0])
+                batch_size_1 = len(data_val_1['weights_' + class1])
                 # get predictions
-                pred_baseline = predict(model, data_val, batch_size, 'Baseline', volatile=True)
-                pred_variation = predict(model, data_val, batch_size, variation, volatile=True)
+                pred_baseline = predict(model, data_val_0, batch_size_0, class0, volatile=True)
+                pred_variation = predict(model, data_val_1, batch_size_1, class1, volatile=True)
                 scores_baseline.extend(F.sigmoid(pred_baseline).data.cpu().numpy())
                 scores_variation.extend(F.sigmoid(pred_variation).data.cpu().numpy())
-                sample_weight.extend(data_val['weights_' + variation])
+                weights_baseline.extend(data_val_0['weights_' + class0])
+                weights_variation.extend(data_val_1['weights_' + class1])
                 # get loss 
-                loss_baseline = compute_loss(pred_baseline, data_val, batch_size, 'Baseline')
-                loss_variation = compute_loss(pred_variation, data_val, batch_size, variation)
-                loss_val += ((loss_baseline + loss_variation) * batch_size / 2.).data[0] # important to get data, not Var
+                loss_baseline = compute_loss(pred_baseline, data_val_0, batch_size_0, class0, classn=0)
+                loss_variation = compute_loss(pred_variation, data_val_1, batch_size_1, class1, classn=1)
+                # important to get data, not Var
+                loss_val += ((loss_baseline * batch_size_0 + loss_variation * batch_size_1) / (batch_size_0 + batch_size_1)).data[0]
 
-            loss_val = float(loss_val / n_validation)
+            loss_val = float(loss_val) / (batch_idx_val + 1.) # / n_validation)
             logger.info('Epoch {}: Validation Loss = {:0.5f}'.format(epoch, loss_val))
 
             # early stopping
@@ -234,12 +266,12 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                         logger.info('Stopping early.')
                         break
             elif monitor == 'roc_auc':
-                y_true = np.concatenate((np.zeros(n_validation), np.ones(n_validation)))
+                y_true = np.concatenate((np.zeros(len(scores_baseline)), np.ones(len(scores_variation))))
                 y_score = np.concatenate((scores_baseline, scores_variation))
                 roc_score = roc_auc_score(
                     y_true,
                     y_score,
-                    sample_weight=np.concatenate( (np.ones(n_validation), sample_weight) )
+                    sample_weight=np.concatenate( (weights_baseline, weights_variation) )
                 )
                 if roc_score > best_roc:
                     logger.info('Validation ROC AUC improved from {:0.5f} to {:0.5f}'.format(best_roc, roc_score))
@@ -258,6 +290,8 @@ def train(model, optimizer, variation, train_data, validation_data, checkpoint_p
                 raise ValueError
     except KeyboardInterrupt:
         logger.info('Training ended early.')
+
+
         
     logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path))
@@ -271,13 +305,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('variation', type=str)
-    parser.add_argument('--maxlen', type=int, default=150)
+    parser.add_argument('config0', type=str, help='Path to yaml config file for class 0')
+    parser.add_argument('class0', type=str, help='Name of variation for class 0. If unweighted, write Baseline')
+    parser.add_argument('config1', type=str, help='Path to yaml config file for class 1')
+    parser.add_argument('class1', type=str, help='Name of variation for class 1. If unweighted, write Baseline')
+    parser.add_argument('--maxlen', type=int, default=100)
     parser.add_argument('--ntrain', type=int, default=100000)
     parser.add_argument('--nval', type=int, default=100000)
     parser.add_argument('--ntest', type=int, default=100000)
     parser.add_argument('--min-lead-pt', type=int, default=500)
-    parser.add_argument('--config', type=str, default='test.yaml')
     parser.add_argument('--batchsize', type=int, default=128)
     parser.add_argument('--nepochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=5)
@@ -296,27 +332,35 @@ if __name__ == '__main__':
 
     # load or make data
     logger.debug('Loading data')
-    dataloader, dataloader_val, dataloader_test = load_data(
-        args.config,
-        args.variation,
-        args.ntrain,
-        args.nval,
-        args.ntest,
-        args.maxlen,
-        args.min_lead_pt,
-        args.batchsize
+    dataloader_0, dataloader_val_0, dataloader_test_0, varID_0 = load_data(
+        args.config0, args.class0, args.ntrain, args.nval, args.ntest, args.maxlen, args.min_lead_pt, args.batchsize
     )
+    # variation could be None here
+    dataloader_1, dataloader_val_1, dataloader_test_1, varID_1 = load_data(
+        args.config1, args.class1, args.ntrain, args.nval, args.ntest, args.maxlen, args.min_lead_pt, args.batchsize
+    )
+
+    if varID_0 == varID_1:
+        logger.warning('Requested classification of datasets with identical parameters!')
 
     # data inspection
     logger.debug('Plotting distributions')
+    plotting.plot_weights(
+        dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
+        dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
+        varID_0, varID_1, args.class0, args.class1)
     plotting.plot_jetn_trkn(
-        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset,
-        args.variation, jetn=0, trkn=0)
+        dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
+        dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
+        varID_0, varID_1, args.class0, args.class1, jetn=0, trkn=0)
     plotting.plot_jetn_trkn(
-        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset,
-        args.variation, jetn=1, trkn=0)
+        dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
+        dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
+        varID_0, varID_1, args.class0, args.class1, jetn=1, trkn=0)
     plotting.plot_ntrack(
-        dataloader.dataset, dataloader_val.dataset, dataloader_test.dataset, args.variation)
+        dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
+        dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
+        varID_0, varID_1, args.class0, args.class1)
 
     # initialize model
     if args.model == 'rnn': 
@@ -338,7 +382,11 @@ if __name__ == '__main__':
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.0)
     logger.debug('Model: {}'.format(model))
 
-    checkpoint_path = args.checkpoint + '_' + args.model + '_' + args.variation + '.pth'
+    safe_mkdir('checkpoints')
+    checkpoint_path = os.path.join(
+        'checkpoints',
+        args.checkpoint + '_' + args.model + '_' + varID_0 + '_' + varID_1 + '.pth'
+    )
     if args.pretrain and os.path.exists(checkpoint_path):
         logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
         model.load_state_dict(torch.load(checkpoint_path))
@@ -348,29 +396,52 @@ if __name__ == '__main__':
     # train
     train(model,
         optimizer,
-        args.variation,
-        dataloader,
-        dataloader_val,
+        args.class0, args.class1,
+        varID_0, varID_1,
+        dataloader_0, dataloader_1, 
+        dataloader_val_0, dataloader_val_1,
         checkpoint_path=checkpoint_path,
         epochs=args.nepochs,
         patience=args.patience,
         monitor=args.monitor
     )
 
+
     # test
     logger.debug('Testing')
-    pred_baseline, pred_variation, sample_weight = multitest(model, dataloader_test, args.variation, times=args.test_iter)
+    pred_baseline, pred_variation, weights_baseline, weights_variation,\
+    features_baseline, features_variation = multitest(model,
+        dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
+
+    # plot hidden features
+    plotting.plot_batch_features(
+        np.concatenate(features_baseline, axis=0),
+        np.concatenate(features_variation, axis=0),
+        varID_0,
+        varID_1,
+        np.array(weights_baseline[-1]).ravel(),
+        np.array(weights_variation[-1]).ravel(),
+        args.model
+    )
+
     # check performance
     for t in range(args.test_iter):
         plotting.plot_output(
-            np.array(pred_baseline[t]).ravel(), np.array(pred_variation[t]).ravel(),
-            args.variation, np.array(sample_weight[t]).ravel(), args.model, t)
-        y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_baseline[0]))))
+            np.array(pred_baseline[t]).ravel(),
+            np.array(pred_variation[t]).ravel(),
+            varID_0,
+            varID_1,
+            np.array(weights_baseline[t]).ravel(),
+            np.array(weights_variation[t]).ravel(),
+            args.model,
+            t
+        )
+        y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_variation[0]))))
         y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
         logger.debug('ROC iteration {}'.format(t))
         logger.info(roc_auc_score(
             y_true,
             y_score,
             # average='weighted',
-            sample_weight=np.concatenate( (np.ones(len(pred_baseline[0])), sample_weight[t]) )
+            sample_weight=np.concatenate( (weights_baseline[t], weights_variation[t]) )
         ))

@@ -124,6 +124,8 @@ def generate_events(config_path, nevents):
     '''
     pythia = Pythia(config_path, verbosity=1)
     variations = pythia.weight_labels
+    if variations == ['']:
+        variations = ['Baseline'] # to match hard-coded decision in Pythia
 
     # only consider final state particles that are not neutrinos
     selection = ((STATUS == 1) & ~HAS_END_VERTEX & # final state
@@ -138,6 +140,7 @@ def generate_events(config_path, nevents):
         events_particles.append(event.all(selection))
     # convert to numpy arrays for usability
     events_weights = np.array(events_weights)
+    # defaults to 'f0' if no variations are specified!!
     events_weights = events_weights.view(
                         dtype=[(n, 'float64') for n in variations])
     events_particles = np.array(events_particles)
@@ -210,9 +213,16 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
     # load datasets
     temp_filepath, cfg = read_pythia_from_yaml(config)
 
-    # check that requested variation is present in the config
-    if not variation in cfg['UncertaintyBands:List']:
-        raise ValueError('Requested variation not in ' + config)
+    if variation == 'Baseline':
+        # TODO: allow more parameter variations
+        if 'TimeShower:renormMultFac' in cfg:
+            varID = 'unweighted_fsr' + str(cfg['TimeShower:renormMultFac']).replace('.', '')
+        elif 'UncertaintyBands:List' in cfg:
+            varID = 'weighted_Baseline'
+    else:
+        if 'UncertaintyBands:List' not in cfg or variation not in cfg['UncertaintyBands:List']:
+            raise ValueError('Requested variation {} not in {}'.format(variation, config))
+        varID = 'weighted_' + variation 
 
     def _load_data(sample, nevents):
         logger.debug('Loading {} set'.format(sample))
@@ -239,4 +249,4 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
                     num_workers=4,
                     pin_memory=pin_memory) # for GPU
 
-    return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest)
+    return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest), varID

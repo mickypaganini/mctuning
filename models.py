@@ -16,12 +16,12 @@ class NTrackModel(nn.Module):
 #         self.dense0 = nn.Linear(32, 64)
 #         self.dropout0 = nn.Dropout(p=0.7)
 #         self.dense1 = nn.Linear(64, 64)
-        self.dense1 = nn.Linear(32, 32)
+        self.dense1 = nn.Linear(32, 2)
         
 #         self.dense2 = nn.Linear(64 * 4, 32) # 4 is from the concat below
         # self.dropout2 = nn.Dropout(p=0.5)
 #         self.dense3 = nn.Linear(32, 1)
-        self.dense3 = nn.Linear(32 * 2, 1)
+        self.dense3 = nn.Linear(2 * 2, 1)
 
 
     def forward(self, inputs, batch_weights, batch_size):
@@ -42,11 +42,13 @@ class NTrackModel(nn.Module):
         
         # weighted_mult = batch_weights.transpose(0, 1).expand(-1, hidden.shape[-1]) * hidden
         # std = torch.std(weighted_mult, 0).expand(batch_size, -1)
+
         batch_mean = batch_weights.mm(hidden).expand(batch_size, hidden.shape[-1])
         batch_second_moment = batch_weights.mm(torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
         batch_std = batch_second_moment - torch.pow(batch_mean, 2)
 
-        batch_features = torch.cat([batch_mean, batch_std], 1)         
+        batch_features = torch.cat([batch_mean, batch_std], 1)
+        self.batch_features = batch_features       
         outputs = self.dense3(
             # self.dropout2(
 #                 F.relu(
@@ -180,5 +182,6 @@ class DoubleLSTM(nn.Module):
         batch_std = batch_second_moment - torch.pow(batch_mean, 2)
 
         batch_features = torch.cat([batch_mean, batch_std], 1)
+        self.batch_features = batch_features
         outputs = self.dense2(F.relu(self.dense(batch_features)))
         return outputs
