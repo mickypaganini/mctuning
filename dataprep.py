@@ -16,12 +16,17 @@ import os
 import cPickle as pickle
 import logging
 from joblib import Parallel, delayed
+import h5py
 
 from pyjet import cluster
 from numpythia import Pythia, STATUS, HAS_END_VERTEX, ABS_PDG_ID
 
 from utils import configure_logging
 from pythiaconf import read_pythia_from_yaml, create_dataset_hash
+
+from multiprocessing import Lock
+
+# LOCK = Lock()
 
 # logging
 configure_logging()
@@ -137,13 +142,13 @@ def generate_events(config_path, nevents):
     events_weights = []
     # generate events from pythia
     for event in pythia(events=nevents):
-        events_weights.append(event.weights)
+        events_weights.append(event.weights.astype('float32'))
         events_particles.append(event.all(selection))
     # convert to numpy arrays for usability
     events_weights = np.array(events_weights)
     # defaults to 'f0' if no variations are specified!!
     events_weights = events_weights.view(
-                        dtype=[(n, 'float64') for n in variations])
+                        dtype=[(n, 'float32') for n in variations])
     events_particles = np.array(events_particles)
 
     return events_particles, events_weights
@@ -182,7 +187,11 @@ class DijetDataset(Dataset):
         d = data.to_dict()
         pickle.dump(d, open(...))
         """
-        return dict(self.__dict__)
+        d = dict(self.__dict__)
+        for k in d:
+            if k not in ['nevents', 'weights']:
+                d[k] = d[k].astype('float32')
+        return d
 
     @classmethod
     def from_dict(cls, d):
@@ -210,6 +219,7 @@ class DijetDataset(Dataset):
         return self.nevents
 
     def __getitem__(self, idx):
+        # with LOCK:
         sample = {
             'leading_jet': self.leading_jet[idx],
             'subleading_jet': self.subleading_jet[idx],
@@ -239,26 +249,39 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
 
     def _load_data(sample, nevents):
         logger.debug('Loading {} set'.format(sample))
-        dataset_string = 'dataset_' + sample + '_' + create_dataset_hash(cfg,
+        dataset_string = os.path.join('data', 'dataset_' + sample + '_' + create_dataset_hash(cfg,
         extra_args={
             'nevents': nevents,
             'max_len': maxlen,
             'min_lead_pt': min_lead_pt
-        }) + '.pkl'
-
+        }) + '.h5') #.pkl
+        print dataset_string
         if os.path.isfile(dataset_string):
-            dic = pickle.load(open(dataset_string, 'r'))
+            #dic = pickle.load(open(dataset_string, 'r'))
+            # f = h5py.File(dataset_string, 'r')
+            with h5py.File(dataset_string) as f:
+                def convert(x):
+                    if len(x.shape) > 0:
+                        return np.array(x[:])
+                    return x
+                dic = {key : convert(f[key]) for key in f.keys()}
+            # if 'nevents' in dic:
+                dic['nevents'] = int(dic['nevents'].value)
             d = DijetDataset.from_dict(dic)
         else:
             dataset_list = Parallel(n_jobs=11, verbose=True)(delayed(DijetDataset)(
-                temp_filepath, nevents=nevents/10, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(10))
+                temp_filepath, nevents=nevents/50, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(50))
             d = DijetDataset.concat(dataset_list)
-            pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
+            #pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
+            with h5py.File(dataset_string) as f:
+                for key, value in d.to_dict().iteritems():
+                    f[key] = value
         pin_memory = True if torch.cuda.is_available() else False
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=True,
-                    num_workers=4,
+                    num_workers=6,
+                    # num_workers=0,
                     pin_memory=pin_memory) # for GPU
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest), varID

@@ -14,6 +14,8 @@ import logging
 import sys
 import os
 from sklearn.metrics import roc_auc_score
+from tqdm import tqdm
+from itertools import izip
 
 from dataprep import load_data
 from models import DoubleLSTM, NTrackModel
@@ -25,6 +27,8 @@ configure_logging()
 logger = logging.getLogger("Main")
 
 customFloatTensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+customLongTensor = torch.cuda.LongTensor if torch.cuda.is_available() else torch.LongTensor
+
 
 def compute_loss(predictions, data, batch_size, classname, classn):
     '''
@@ -48,7 +52,7 @@ def compute_loss(predictions, data, batch_size, classname, classn):
     return loss
 
 
-def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, classname, classn):
+def train_on_batch(model, optimizer, epoch, batch_size, data, classname, classn):
     '''
     Notes:
         Calls predict() to get predictions
@@ -58,7 +62,7 @@ def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, classna
         batch weighted loss values
     '''
     # for n, classname in enumerate([class0, class1]):
-    optimizer.zero_grad()
+    # optimizer.zero_grad()
     # get predictions
     predictions = predict(model, data, batch_size, classname, volatile=False)
     # get loss 
@@ -66,7 +70,7 @@ def train_on_batch(model, optimizer, epoch, batch_idx, batch_size, data, classna
     # update weights
     loss.backward()
     # torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
-    optimizer.step()
+    # optimizer.step()
     return (batch_size * loss).data[0] # batch weighted loss
     # return tuple(returns) # batch weighted losses for baseline and variation
 
@@ -96,7 +100,8 @@ def predict(model, data, batch_size, classname, volatile):
     elif isinstance(model, DoubleLSTM):
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
-        unsorted_lengths = data['unsorted_lengths'].numpy()
+        # unsorted_lengths = Variable(data['unsorted_lengths'].type(customLongTensor), volatile=volatile)
+        unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
         predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
 
     else:
@@ -115,13 +120,13 @@ def multitest(model, dataloader_0, dataloader_1, class0, class1, times=2):
     # will be lists of lists [times x n_events]
     pred_baseline, pred_variation, weights_baseline, weights_variation = [], [], [], []
 
-    for t in range(times): # number of independent evaluations
+    for t in tqdm(range(times)): # number of independent evaluations
         logger.debug('Test iteration number {}'.format(t))
 
         pred_baseline_t, pred_variation_t, weights_baseline_t, weights_variation_t = [], [], [], []
         features_baseline, features_variation = [], []
 
-        for batch_idx, (data_0, data_1) in enumerate(zip(dataloader_0, dataloader_1)): # loop thru batches
+        for batch_idx, (data_0, data_1) in enumerate(izip(dataloader_0, dataloader_1)): # loop thru batches
             if batch_idx % 10:
                 logger.debug('Batch {}'.format(batch_idx))
             batch_size_0 = len(data_0['weights_' + class0])
@@ -178,10 +183,9 @@ def train(model,
     best_loss = np.inf
     best_roc = 0.
     wait = 0
-        
+
     try:    
         for epoch in range(epochs):
-            
             # set model state to training
             model.train()
             
@@ -190,15 +194,21 @@ def train(model,
             batch_weighted_loss_variation_epoch = 0
             
             # zipping cuts length
-            for batch_idx, (data_0, data_1) in enumerate(zip(train_data_0, train_data_1)):
+            
+            it = izip(train_data_0, train_data_1)
+            for batch_idx, (data_0, data_1) in enumerate(it):
                 this_batch_size_0 = len(data_0['weights_' + class0])
                 this_batch_size_1 = len(data_1['weights_' + class1])
-                
-                batch_weighted_loss_baseline_i = train_on_batch(
-                    model, optimizer, epoch, batch_idx, this_batch_size_0, data_0, class0, classn=0)
-                batch_weighted_loss_variation_i = train_on_batch(
-                    model, optimizer, epoch, batch_idx, this_batch_size_1, data_1, class1, classn=1)
 
+                if batch_idx % 10 == 0:
+                    optimizer.zero_grad()
+                batch_weighted_loss_baseline_i = train_on_batch(
+                    model, optimizer, epoch, this_batch_size_0, data_0, class0, classn=0)
+                batch_weighted_loss_variation_i = train_on_batch(
+                    model, optimizer, epoch, this_batch_size_1, data_1, class1, classn=1)
+
+                if batch_idx % 10 == 0:
+                    optimizer.step()
                 if batch_idx % 1 == 0:
                     logger.debug('Epoch: {} [{}/{} ({}%)]; Loss: {} = {:0.3f}, {} = {:0.3f}, Total = {:0.5f}'.format(
                         epoch,
@@ -232,7 +242,7 @@ def train(model,
             loss_val = 0
             scores_baseline, scores_variation, weights_baseline, weights_variation = [], [], [], []
 
-            for batch_idx_val, (data_val_0, data_val_1) in enumerate(zip(validation_data_0, validation_data_1)):
+            for batch_idx_val, (data_val_0, data_val_1) in enumerate(izip(validation_data_0, validation_data_1)):
                 batch_size_0 = len(data_val_0['weights_' + class0])
                 batch_size_1 = len(data_val_1['weights_' + class1])
                 # get predictions
@@ -343,7 +353,6 @@ if __name__ == '__main__':
     if varID_0 == varID_1:
         logger.warning('Requested classification of datasets with identical parameters!')
 
-    # data inspection
     logger.debug('Plotting distributions')
     plotting.plot_weights(
         dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
@@ -368,7 +377,7 @@ if __name__ == '__main__':
                         output_size=32,
                         num_layers=1,
                         dropout=0.0,
-                        bidirectional=False,
+                        bidirectional=True,
                         batch_size=args.batchsize,
                         tagger_output_size=1
         )
@@ -379,7 +388,8 @@ if __name__ == '__main__':
         model.cuda() # move model to GPU
         logger.info('Running on GPU')
         
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.0)
+    optimizer = optim.RMSprop(model.parameters(), lr=args.lr, momentum=0.0)
+    # optimizer = optim.SGD(model.parameters(), lr=args.lr)#, momentum=0.95, nesterov=True)
     logger.debug('Model: {}'.format(model))
 
     safe_mkdir('checkpoints')
@@ -423,6 +433,9 @@ if __name__ == '__main__':
         np.array(weights_variation[-1]).ravel(),
         args.model
     )
+
+    np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
+    np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
 
     # check performance
     for t in range(args.test_iter):
