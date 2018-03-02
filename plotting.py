@@ -132,6 +132,7 @@ def plot_ntrack(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1
         plt.legend(fontsize=15)
         plt.xlabel('Number of tracks')
         plt.savefig(os.path.join('plots','jet{}_ntracks_{}_{}.pdf'.format(jet, varID_0, varID_1)))
+        plt.close()
 
 def plot_batch_features(features_baseline, features_variation, varID_0, varID_1, weights_baseline, weights_variation, model_name):
     safe_mkdir('plots')
@@ -146,6 +147,7 @@ def plot_batch_features(features_baseline, features_variation, varID_0, varID_1,
                  weights=weights_variation)
         plt.legend(loc='upper left')
         plt.savefig(os.path.join('plots','{}_{}_{}_{}.pdf'.format(model_name, varID_0, varID_1, fn)))
+        plt.close()
 
 
 def plot_output(pred_baseline, pred_variation, varID_0, varID_1, weights_baseline, weights_variation, model_name, t=''):
@@ -165,3 +167,4 @@ def plot_output(pred_baseline, pred_variation, varID_0, varID_1, weights_baselin
     plt.legend(loc='upper left')
     plt.xlabel('Weighted NN Output')
     plt.savefig(os.path.join('plots','{}_{}_{}_output_{}.pdf'.format(model_name, varID_0, varID_1, t)))
+    plt.close()
