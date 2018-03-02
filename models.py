@@ -6,6 +6,28 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import numpy as np
 
+
+# def get_last_h(rnn, packed_sequence, lengths, batch_first=True):
+#     """Computes the last hidden state of an RNN
+    
+#     Args:
+#         rnn (nn.Module): PyTorch RNN
+#         packed_sequence (nn.utils.rnn.PackedSequence): Input sequence
+#         lengths (torch.LongTensor or torch.cuda.LongTensor): Lengths (assumed 
+#             to be presorted!)
+#         batch_first (bool): obvious
+#     """
+#     h, _ = rnn(packed_sequence)
+#     h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=batch_first)
+
+#     idx = (lengths - 1).view(-1, 1).expand(len(lengths), h.size(2))
+#     time_dimension = 1 if batch_first else 0
+#     idx = idx.unsqueeze(time_dimension)
+#     if h.is_cuda:
+#         idx = idx.cuda(h.data.get_device())
+#     last_output = h.gather(time_dimension, Variable(idx)).squeeze(time_dimension)
+#     return last_output
+
 class NTrackModel(nn.Module):
 
     def __init__(self, input_size):
@@ -89,41 +111,37 @@ class DoubleLSTM(nn.Module):
             bidirectional=bidirectional
         )
 
-        self.init_lstm()
-
         # output dense layer
         self.dense = nn.Linear(
             # (2 *) because of torch.cat; (* 2) because of 2 streams
             2 * (output_size * self.num_directions * 2),
-            128
+            128 #tagger_output_size#128
         )
+
+    #     self.init_layers()
 
         self.dense2 = nn.Linear(128, tagger_output_size)
 
-    def init_lstm(self):
-        for l in [self.lstm_lead, self.lstm_sublead]:
-            # recurrent kernel init
-            nn.init.orthogonal(l.weight_hh_l0)
+    # def init_layers(self):
+    #     nn.init.xavier_uniform(self.dense.weight, gain=0.5)
+    #     self.dense.bias.data.zero_()
+    #     self.init_lstm()
 
-            # in -> h kernel init
-            nn.init.xavier_uniform(l.weight_ih_l0)
+    # def init_lstm(self):
+    #     for l in [self.lstm_lead, self.lstm_sublead]:
+    #         # recurrent kernel init
+    #         nn.init.orthogonal(l.weight_hh_l0)
 
+    #         # in -> h kernel init
+    #         nn.init.xavier_uniform(l.weight_ih_l0)
 
-            # Initialize the forget gate to one
-            for bias in [l.bias_hh_l0, l.bias_ih_l0]:
-                bias.data.zero_()
-                bias.data[l.hidden_size:2 * l.hidden_size] = 1.0
+    #         # Initialize the forget gate to one
+    #         for bias in [l.bias_hh_l0, l.bias_ih_l0]:
+    #             bias.data.zero_()
+    #             # bias.data[l.hidden_size:2 * l.hidden_size] = 1.0
 
     def forward(self, leading_jets, subleading_jets, lengths,
                 batch_weights, batch_size):
-
-        # sort the data by length of sequence in decreasing order (because
-        # PyTorch)
-
-        ten_type = torch.cuda.LongTensor if torch.cuda.is_available() \
-            else torch.LongTensor
-
-        lengths = torch.from_numpy(lengths).type(ten_type)
 
         if torch.cuda.is_available():
             leading_jets.cuda()
@@ -133,6 +151,7 @@ class DoubleLSTM(nn.Module):
         lead_len = lengths[:, 0]
         sublead_len = lengths[:, 1]
 
+        # sort the data by length of sequence in decreasing order (because PyTorch)
         lead_len, lead_sort = torch.sort(lead_len, descending=True)
         sublead_len, sublead_sort = torch.sort(sublead_len, descending=True)
 
@@ -153,10 +172,12 @@ class DoubleLSTM(nn.Module):
             batch_first=True,
             lengths=sublead_len.tolist()
         )
-
+        
         # LSTMs return (nb_layers * directions, batch, features)
         _, (h_lead, _) = self.lstm_lead(packed_leading_jets)
+        # _, (h_lead, _) = self.lstm_lead(leading_jets)
         _, (h_sublead, _) = self.lstm_sublead(packed_subleading_jets)
+        # _, (h_sublead, _) = self.lstm_sublead(subleading_jets) # n_layers * n_dir X batch_size X n_feat
 
         # Only need the last LSTM layer, and want batch first
         # Turns to (batch, directions, features)
@@ -164,8 +185,11 @@ class DoubleLSTM(nn.Module):
         h_sublead = h_sublead[-self.num_directions:].transpose(0, 1)
 
         # Turns to (batch, directions * features)
-        h_lead = h_lead.contiguous().view(h_lead.size(0), -1)
-        h_sublead = h_sublead.contiguous().view(h_sublead.size(0), -1)
+        h_lead = h_lead.contiguous().view(batch_size, -1)
+        h_sublead = h_sublead.contiguous().view(batch_size, -1)
+
+        # h_lead = get_last_h(self.lstm_lead, packed_leading_jets, lead_len)
+        # h_sublead = get_last_h(self.lstm_sublead, packed_subleading_jets, sublead_len)
 
         # sort back
         h_lead = h_lead[lead_unsort]
@@ -173,7 +197,7 @@ class DoubleLSTM(nn.Module):
 
         # concatenate outputs of the 2 LSTMs
         hidden = torch.cat([h_lead, h_sublead], 1)
-        hidden = F.relu(hidden)
+        # hidden = F.relu(hidden)
 
         batch_mean = batch_weights.mm(hidden).expand(
             batch_size, hidden.shape[-1])
@@ -184,4 +208,5 @@ class DoubleLSTM(nn.Module):
         batch_features = torch.cat([batch_mean, batch_std], 1)
         self.batch_features = batch_features
         outputs = self.dense2(F.relu(self.dense(batch_features)))
+        # outputs = self.dense(batch_features)
         return outputs
