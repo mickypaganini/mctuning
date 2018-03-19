@@ -25,7 +25,7 @@ from utils import configure_logging
 from pythiaconf import read_pythia_from_yaml, create_dataset_hash
 
 from multiprocessing import Lock
-
+import multiprocessing 
 # LOCK = Lock()
 
 # logging
@@ -269,8 +269,9 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
                 dic['nevents'] = int(dic['nevents'].value)
             d = DijetDataset.from_dict(dic)
         else:
-            dataset_list = Parallel(n_jobs=11, verbose=True)(delayed(DijetDataset)(
-                temp_filepath, nevents=nevents/50, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(50))
+            ncpu = multiprocessing.cpu_count() - 1 
+            dataset_list = Parallel(n_jobs=ncpu, verbose=True)(delayed(DijetDataset)(
+                temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(ncpu))
             d = DijetDataset.concat(dataset_list)
             #pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
             with h5py.File(dataset_string) as f:
