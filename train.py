@@ -62,7 +62,7 @@ def train_on_batch(model, optimizer, epoch, batch_size, data, classname, classn)
         batch weighted loss values
     '''
     # for n, classname in enumerate([class0, class1]):
-    # optimizer.zero_grad()
+    #optimizer.zero_grad()
     # get predictions
     predictions = predict(model, data, batch_size, classname, volatile=False)
     # get loss 
@@ -70,7 +70,7 @@ def train_on_batch(model, optimizer, epoch, batch_size, data, classname, classn)
     # update weights
     loss.backward()
     # torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
-    # optimizer.step()
+    #optimizer.step()
     return (batch_size * loss).data[0] # batch weighted loss
     # return tuple(returns) # batch weighted losses for baseline and variation
 
@@ -200,15 +200,22 @@ def train(model,
                 this_batch_size_0 = len(data_0['weights_' + class0])
                 this_batch_size_1 = len(data_1['weights_' + class1])
 
-                if batch_idx % 10 == 0:
-                    optimizer.zero_grad()
                 batch_weighted_loss_baseline_i = train_on_batch(
                     model, optimizer, epoch, this_batch_size_0, data_0, class0, classn=0)
                 batch_weighted_loss_variation_i = train_on_batch(
                     model, optimizer, epoch, this_batch_size_1, data_1, class1, classn=1)
 
-                if batch_idx % 10 == 0:
+                if (batch_idx % 10 == 0) and (batch_idx > 0):
+                # if batch_idx % 64 == 0:
+                    # print 'grad:'
+                    # print model.dense.weight.grad
+                    # np.save('densegrad1.npy', model.dense.weight.grad.cpu().data.numpy())
+                    # np.save('densegrad2.npy', model.dense2.weight.grad.cpu().data.numpy())
+                    # print '---'
+                    # print model.dense.weight.min(), model.dense.weight.mean(), model.dense.weight.max()
                     optimizer.step()
+                    optimizer.zero_grad()
+
                 if batch_idx % 1 == 0:
                     logger.debug('Epoch: {} [{}/{} ({}%)]; Loss: {} = {:0.3f}, {} = {:0.3f}, Total = {:0.5f}'.format(
                         epoch,
@@ -422,6 +429,7 @@ if __name__ == '__main__':
     pred_baseline, pred_variation, weights_baseline, weights_variation,\
     features_baseline, features_variation = multitest(model,
         dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
+#        dataloader_0, dataloader_1, args.class0, args.class1, times=args.test_iter) 
 
     # plot hidden features
     plotting.plot_batch_features(
