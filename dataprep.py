@@ -32,7 +32,27 @@ import multiprocessing
 configure_logging()
 logger = logging.getLogger("Data Preparation")
 
-def _properties(constituents):
+def deltaR(eta1, eta2, phi1, phi2):
+    import math
+    '''
+    Definition:
+    -----------
+        Function that calculates DR between two objects given their etas and phis
+    Args:
+    -----
+        eta1 = float, eta of first object
+        eta2 = float, eta of second object
+        phi1 = float, phi of first object
+        phi2 = float, phi of second object
+    Output:
+    -------
+        deltaR = float, distance between the two objects 
+    '''
+    deta = abs(eta1-eta2)
+    dphi = math.acos(math.cos( abs( phi1-phi2 ) ) ) # hack to avoid |phi1-phi2| larger than 180 degrees
+    return math.sqrt( pow(deta,2) + pow(dphi,2) ) 
+
+def _properties(jet, constituents):
     '''
     Arguments:
     ----------
@@ -47,10 +67,21 @@ def _properties(constituents):
 #       [np.array([c.e, c.et, c.eta, c.mass, c.phi, c.pt, c.px, c.py, c.pz])
 #           for c in constituents]).view(dtype=[(l, 'float64')
 #               for l in ('E', 'Et', 'eta', 'm', 'phi', 'pt', 'px', 'py', 'pz')])
-    return np.array([np.array([c.e / 1000., c.et / 1000., c.eta, c.mass, c.phi, c.pt / 1000., c.px / 1000., c.py / 1000., c.pz / 1000.]) 
-            for c in constituents])
 
-def _padded(properties, max_len=50, n_properties=9):
+    # normalize MeV variables to GeV range (lazy normalization)
+    return np.array([np.array([
+        c.e / 1000.,
+        c.et / 1000.,
+        c.eta,
+        c.mass,
+        c.phi,
+        c.pt / 1000.,
+        c.px / 1000.,
+        c.py / 1000.,
+        c.pz / 1000.,
+        deltaR(c.eta, jet.eta, c.phi, jet.phi)]) for c in constituents])
+
+def _padded(properties, max_len=50, n_properties=10):
     '''
     Arguments:
     ----------
@@ -102,6 +133,7 @@ def get_leadingjets_constituents(events_particles, jet_ptmin, max_len=50):
         jets = sequence.inclusive_jets(ptmin=jet_ptmin)
         data, lengths, nparticles = _padded(
             [_properties(
+                j,
                 sorted(
                     j.constituents(), key=operator.attrgetter('pt'), reverse=True)
                 ) for j in jets[0:2]
@@ -233,7 +265,7 @@ class DijetDataset(Dataset):
 
 
 def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch_size):
-    # load datasets
+    # Infer what datasets to load from the yaml config file
     temp_filepath, cfg = read_pythia_from_yaml(config)
 
     if variation == 'Baseline':
@@ -248,7 +280,12 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         varID = 'weighted_' + variation 
 
     def _load_data(sample, nevents):
+        '''
+        Given the dataset specifications from cfg, load or create the dataset and return a
+        PyTorch DataLoader. This is to be called individually for sample in {train, test, val}.
+        '''
         logger.debug('Loading {} set'.format(sample))
+        # get unique dataset hash from its specified properties
         dataset_string = os.path.join('data', 'dataset_' + sample + '_' + create_dataset_hash(cfg,
         extra_args={
             'nevents': nevents,
@@ -256,6 +293,8 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             'min_lead_pt': min_lead_pt
         }) + '.h5') #.pkl
         print dataset_string
+
+        # if that dataset already exists, open it and load it into a PyTorch DijetDataset
         if os.path.isfile(dataset_string):
             #dic = pickle.load(open(dataset_string, 'r'))
             # f = h5py.File(dataset_string, 'r')
@@ -268,6 +307,8 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             # if 'nevents' in dic:
                 dic['nevents'] = int(dic['nevents'].value)
             d = DijetDataset.from_dict(dic)
+
+        # if that dataset doesn't exist yet, create it and save it
         else:
             ncpu = multiprocessing.cpu_count() - 1 
             dataset_list = Parallel(n_jobs=ncpu, verbose=True)(delayed(DijetDataset)(
@@ -278,6 +319,8 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
                 for key, value in d.to_dict().iteritems():
                     f[key] = value
         pin_memory = True if torch.cuda.is_available() else False
+
+        # return a PyTorch DataLoader from the DijetDataset above
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=True,
