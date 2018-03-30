@@ -51,3 +51,9 @@ optional arguments:
   --pretrain            Load pretrained weights (default: False)
   ```
 Example: `CUDA_VISIBLE_DEVICES=1 python train.py test.yaml Baseline fsr13.yaml Baseline --ntrain 100000 --ntest 100000 --nval 100000 --model rnn --patience 100 --nepochs 1000 --test-iter 50 --lr 0.001`
+
+## Task List and Ideas:
+- [ ] do not mask zeros
+- [ ] train rnn on all vars + dr
+- [ ] train rnn on only pT + dr
+ 
