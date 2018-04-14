@@ -110,6 +110,31 @@ def predict(model, data, batch_size, classname, volatile):
     return predictions
 
 
+def test(model, dataloader_0, dataloader_1, class0, class1):
+    model.eval()
+    
+    pred_baseline, pred_variation, weights_baseline, weights_variation = [], [], [], []
+
+    for batch_idx, (data_0, data_1) in enumerate(izip(dataloader_0, dataloader_1)): # loop thru batches
+        if batch_idx % 10:
+            logger.debug('Batch {}'.format(batch_idx))
+        batch_size_0 = len(data_0['weights_' + class0])
+        batch_size_1 = len(data_1['weights_' + class1])
+
+        _pred_baseline = predict(model, data_0, batch_size_0, class0, volatile=True)
+        _pred_variation = predict(model, data_1, batch_size_1, class1, volatile=True)
+        if torch.cuda.is_available():
+            pred_baseline.extend(F.sigmoid(_pred_baseline).data.cpu().numpy())
+            pred_variation.extend(F.sigmoid(_pred_variation).data.cpu().numpy())
+        else:
+            pred_baseline.extend(F.sigmoid(_pred_baseline).data.numpy())
+            pred_variation.extend(F.sigmoid(_pred_variation).data.numpy())
+        weights_baseline.extend(data_0['weights_' + class0])
+        weights_variation.extend(data_1['weights_' + class1])
+
+    return pred_baseline, pred_variation, weights_baseline, weights_variation
+
+
 def multitest(model, dataloader_0, dataloader_1, class0, class1, times=2):
     '''
     Custom test function that calls predict() on each batch of
@@ -307,8 +332,6 @@ def train(model,
                 raise ValueError
     except KeyboardInterrupt:
         logger.info('Training ended early.')
-
-
         
     logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path))
@@ -331,14 +354,14 @@ if __name__ == '__main__':
     parser.add_argument('--nval', type=int, default=100000)
     parser.add_argument('--ntest', type=int, default=100000)
     parser.add_argument('--min-lead-pt', type=int, default=500)
-    parser.add_argument('--batchsize', type=int, default=128)
+    parser.add_argument('--batchsize', type=int, default=64)
     parser.add_argument('--nepochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--monitor', type=str, default='roc_auc')
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--model', type=str, default='rnn', help='Either rnn or ntrack')
     parser.add_argument('--checkpoint', type=str, default='checkpoint')
-    parser.add_argument('--test-iter', type=int, default=2)
+    # parser.add_argument('--test-iter', type=int, default=2)
     parser.add_argument('--pretrain', action='store_true', help='Load pretrained weights')
 
     args = parser.parse_args()
@@ -380,10 +403,10 @@ if __name__ == '__main__':
 
     # initialize model
     if args.model == 'rnn': 
-        model = DoubleLSTM(input_size=9,
-                        output_size=32,
+        model = DoubleLSTM(input_size=2, #10
+                        output_size=10,
                         num_layers=1,
-                        dropout=0.0,
+                        dropout=0.3,
                         bidirectional=True,
                         batch_size=args.batchsize,
                         tagger_output_size=1
@@ -426,43 +449,63 @@ if __name__ == '__main__':
 
     # test
     logger.debug('Testing')
-    pred_baseline, pred_variation, weights_baseline, weights_variation,\
-    features_baseline, features_variation = multitest(model,
-        dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
+    # pred_baseline, pred_variation, weights_baseline, weights_variation,\
+    # features_baseline, features_variation = multitest(model,
+    #     dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
 #        dataloader_0, dataloader_1, args.class0, args.class1, times=args.test_iter) 
+    pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
+        dataloader_test_0, dataloader_test_1, args.class0, args.class1)
 
     # plot hidden features
-    plotting.plot_batch_features(
-        np.concatenate(features_baseline, axis=0),
-        np.concatenate(features_variation, axis=0),
-        varID_0,
-        varID_1,
-        np.array(weights_baseline[-1]).ravel(),
-        np.array(weights_variation[-1]).ravel(),
-        args.model
-    )
+    # plotting.plot_batch_features(
+    #     np.concatenate(features_baseline, axis=0),
+    #     np.concatenate(features_variation, axis=0),
+    #     varID_0,
+    #     varID_1,
+    #     np.array(weights_baseline[-1]).ravel(),
+    #     np.array(weights_variation[-1]).ravel(),
+    #     args.model
+    # )
 
-    np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
-    np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
+    # np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
+    # np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
 
     # check performance
-    for t in range(args.test_iter):
-        plotting.plot_output(
-            np.array(pred_baseline[t]).ravel(),
-            np.array(pred_variation[t]).ravel(),
-            varID_0,
-            varID_1,
-            np.array(weights_baseline[t]).ravel(),
-            np.array(weights_variation[t]).ravel(),
-            args.model,
-            t
-        )
-        y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_variation[0]))))
-        y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
-        logger.debug('ROC iteration {}'.format(t))
-        logger.info(roc_auc_score(
-            y_true,
-            y_score,
-            # average='weighted',
-            sample_weight=np.concatenate( (weights_baseline[t], weights_variation[t]) )
-        ))
+    y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
+    y_score = np.concatenate((pred_baseline, pred_variation))
+    logger.info(roc_auc_score(
+        y_true,
+        y_score,
+        # average='weighted',
+        sample_weight=np.concatenate( (weights_baseline, weights_variation) )
+    ))
+    plotting.plot_output(
+        np.array(pred_baseline).ravel(),
+        np.array(pred_variation).ravel(),
+        varID_0,
+        varID_1,
+        np.array(weights_baseline).ravel(),
+        np.array(weights_variation).ravel(),
+        args.model,
+    )
+
+    # for t in range(args.test_iter):
+    #     plotting.plot_output(
+    #         np.array(pred_baseline[t]).ravel(),
+    #         np.array(pred_variation[t]).ravel(),
+    #         varID_0,
+    #         varID_1,
+    #         np.array(weights_baseline[t]).ravel(),
+    #         np.array(weights_variation[t]).ravel(),
+    #         args.model,
+    #         t
+    #     )
+    #     y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_variation[0]))))
+    #     y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
+    #     logger.debug('ROC iteration {}'.format(t))
+    #     logger.info(roc_auc_score(
+    #         y_true,
+    #         y_score,
+    #         # average='weighted',
+    #         sample_weight=np.concatenate( (weights_baseline[t], weights_variation[t]) )
+    #     ))

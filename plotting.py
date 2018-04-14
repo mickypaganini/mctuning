@@ -61,7 +61,7 @@ def plot_jetn_trkn(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varI
 
     for i in range(len(FEATURES)):
         plt.figure(figsize=(8, 8)) 
-        bins = np.linspace(d_0[:][jet][:, trkn, i].min(), d_0[:][jet][:, trkn, i].max(), 10)
+        bins = np.linspace(d_0[:][jet][:, trkn, i].min(), d_0[:][jet][:, trkn, i].max(), 15)
 
         plt.hist(d_0[:][jet][:, trkn, i], weights=d_0[:]['weights_' + class0],
                 histtype='step', normed=True, bins=bins, color='teal',
