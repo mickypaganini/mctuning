@@ -35,26 +35,6 @@ class MinibatchDiscrimination(nn.Module):
 
         return o_b.squeeze(0)
 
-# def get_last_h(rnn, packed_sequence, lengths, batch_first=True):
-#     """Computes the last hidden state of an RNN
-    
-#     Args:
-#         rnn (nn.Module): PyTorch RNN
-#         packed_sequence (nn.utils.rnn.PackedSequence): Input sequence
-#         lengths (torch.LongTensor or torch.cuda.LongTensor): Lengths (assumed 
-#             to be presorted!)
-#         batch_first (bool): obvious
-#     """
-#     h, _ = rnn(packed_sequence)
-#     h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=batch_first)
-
-#     idx = (lengths - 1).view(-1, 1).expand(len(lengths), h.size(2))
-#     time_dimension = 1 if batch_first else 0
-#     idx = idx.unsqueeze(time_dimension)
-#     if h.is_cuda:
-#         idx = idx.cuda(h.data.get_device())
-#     last_output = h.gather(time_dimension, Variable(idx)).squeeze(time_dimension)
-#     return last_output
 
 class NTrackModel(nn.Module):
 
@@ -68,14 +48,14 @@ class NTrackModel(nn.Module):
 #         self.dense1 = nn.Linear(64, 64)
         self.dense1 = nn.Linear(32, 2)
 
-        self.mbd = MinibatchDiscrimination(in_features=2, out_features=6, kernel_dims=8)
+#        self.mbd = MinibatchDiscrimination(in_features=2, out_features=6, kernel_dims=8)
         
 #         self.dense2 = nn.Linear(64 * 4, 32) # 4 is from the concat below
         # self.dropout2 = nn.Dropout(p=0.5)
 #         self.dense3 = nn.Linear(32, 1)
 
-        # self.dense3 = nn.Linear(3 * 2, 1)
-        self.dense3 = nn.Linear(2 + 6, 1)
+        self.dense3 = nn.Linear(3 * 2, 1)
+        #self.dense3 = nn.Linear(2 + 6, 1)
 
 
     def forward(self, inputs, batch_weights, batch_size):
@@ -96,13 +76,13 @@ class NTrackModel(nn.Module):
         # weighted_mult = batch_weights.transpose(0, 1).expand(-1, hidden.shape[-1]) * hidden
         # std = torch.std(weighted_mult, 0).expand(batch_size, -1)
         ###
-        # batch_mean = batch_weights.mm(hidden).expand(batch_size, hidden.shape[-1])
-        # batch_second_moment = batch_weights.mm(torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
-        # batch_std = batch_second_moment - torch.pow(batch_mean, 2)
-        # all_features = torch.cat([batch_mean, batch_std, hidden], 1)
+        batch_mean = batch_weights.mm(hidden).expand(batch_size, hidden.shape[-1])
+        batch_second_moment = batch_weights.mm(torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
+        batch_std = batch_second_moment - torch.pow(batch_mean, 2)
+        all_features = torch.cat([batch_mean, batch_std, hidden], 1)
         ###
-        mbd_features = self.mbd(hidden, batch_weights)
-        all_features = torch.cat([hidden, mbd_features], 1)
+        #mbd_features = self.mbd(hidden, batch_weights)
+        #all_features = torch.cat([hidden, mbd_features], 1)
 
 
         # self.batch_features = all_features       
@@ -145,15 +125,15 @@ class DoubleLSTM(nn.Module):
             dropout=dropout,
             bidirectional=bidirectional
         )
-        self.mbd = MinibatchDiscrimination(
-            in_features=3 * (output_size * self.num_directions * 2),
-            out_features= 3 * (output_size * self.num_directions * 2),
-            kernel_dims=8)
+        #self.mbd = MinibatchDiscrimination(
+        #    in_features=3 * (output_size * self.num_directions * 2),
+        #    out_features= 3 * (output_size * self.num_directions * 2),
+        #    kernel_dims=8)
 
         # output dense layer
         self.dense = nn.Linear(
             # (3 *) because of torch.cat; (* 2) because of 2 streams
-            2 * (output_size * self.num_directions * 2),
+            3 * (output_size * self.num_directions * 2),
             128 #tagger_output_size#128
         )
         self.dropout = nn.Dropout(p=0.5)
@@ -244,18 +224,50 @@ class DoubleLSTM(nn.Module):
         hidden = torch.cat([h_lead, h_sublead], 1)
         # hidden = F.relu(hidden)
 
-        # batch_mean = batch_weights.mm(hidden).expand(
-        #     batch_size, hidden.shape[-1])
-        # batch_second_moment = batch_weights.mm(
-        #     torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
-        # batch_std = batch_second_moment - torch.pow(batch_mean, 2)
+        batch_mean = batch_weights.mm(hidden).expand(
+             batch_size, hidden.shape[-1])
+        batch_second_moment = batch_weights.mm(
+             torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
+        batch_std = batch_second_moment - torch.pow(batch_mean, 2)
 
-        # all_features = torch.cat([batch_mean, batch_std, hidden], 1)
+        all_features = torch.cat([batch_mean, batch_std, hidden], 1)
 
-        mbd_features = self.mbd(hidden, batch_weights)
-        all_features = torch.cat([hidden, mbd_features], 1)
+        #mbd_features = self.mbd(hidden, batch_weights)
+        #all_features = torch.cat([hidden, mbd_features], 1)
 
         # self.batch_features = batch_features
         outputs = self.dense2(self.dropout1(F.relu(self.dense(self.dropout(all_features)))))
         # outputs = self.dense(batch_features)
         return outputs
+
+
+class Conv1DModel(nn.Module):
+    def __init__(self, input_size, hidden_size, rnn_output_size, kernel_size,
+                 dropout=0.0, bidirectional=False):
+        super(Conv1DModel, self).__init__()
+
+        # members
+        self.conv1 = nn.Conv1D(input_size, hidden_size, kernel_size)
+        self.conv2 = nn.Conv1D(input_size, hidden_size, kernel_size)
+        self.rnn1 = nn.GRU(
+            input_size=hidden_size,
+            hidden_size=rnn_output_size,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=bidirectional
+        )
+        self.rnn2 = nn.GRU(
+            input_size=hidden_size,
+            hidden_size=rnn_output_size,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=bidirectional
+        )
+        def forward(self, leading_jets, subleading_jets, batch_weights):
+            batch_size = batch_weights.shape[0]
+            c1 = self.conv1(leading_jets.transpose(1, 2)) # swap seq_length and features
+            c2 = self.conv2(subleading_jets.transpose(1, 2))
+            r1 = self.rnn1(c1.transpose(1, 2)) # swap back
+            r2 = self.rnn2(c2.transpose(1, 2))
+            
+            
