@@ -121,6 +121,8 @@ def get_leadingjets_constituents(events_particles, jet_ptmin, max_len=50):
     events_lengths = []
     events_nparticles = []
     events_jetpts = []
+    events_jetetas = []
+    events_jetphis = []
 
     # loop through events
     for particles in events_particles:
@@ -143,9 +145,11 @@ def get_leadingjets_constituents(events_particles, jet_ptmin, max_len=50):
         events_lengths.append(lengths)
         events_nparticles.append(nparticles)
         events_jetpts.append([j.pt for j in jets[0:2]])
+        events_jetetas.append([j.eta for j in jets[0:2]])
+        events_jetphis.append([j.phi for j in jets[0:2]])
 
-    return np.array(events_constituents), np.array(events_lengths), np.array(events_nparticles), np.array(events_jetpts)
-
+    return np.array(events_constituents), np.array(events_lengths), np.array(events_nparticles), np.array(events_jetpts),\
+        np.array(events_jetetas), np.array(events_jetphis)
 
 
 def generate_events(config_path, nevents):
@@ -195,7 +199,7 @@ class DijetDataset(Dataset):
         if config_path is not None:
             self.nevents = nevents
             particles, self.weights = generate_events(config_path, nevents)
-            constituents, lengths, self.nparticles, self.jetpts = get_leadingjets_constituents(
+            constituents, lengths, self.nparticles, self.jetpts, self.jetetas, self.jetphis = get_leadingjets_constituents(
                 particles, jet_ptmin=10.0, max_len=max_len
             )
             self.leading_jet = np.squeeze(constituents[:, 0, :, :])
@@ -211,7 +215,9 @@ class DijetDataset(Dataset):
                 self.nparticles = self.nparticles[self.jetpts[:, 0] > min_lead_pt]
                 self.weights = self.weights[self.jetpts[:, 0] > min_lead_pt]
                 self.jetpts = self.jetpts[self.jetpts[:, 0] > min_lead_pt]
-    
+                self.jetetas = self.jetetas[self.jetpts[:, 0] > min_lead_pt]
+                self.jetphis = self.jetphis[self.jetpts[:, 0] > min_lead_pt]
+                
     def to_dict(self):
         """
         data = DijetDataset(...)
@@ -257,7 +263,9 @@ class DijetDataset(Dataset):
             'subleading_jet': self.subleading_jet[idx],
             'unsorted_lengths': self.lengths[idx],
             'nparticles': self.nparticles[idx],
-            'jet_pts': self.jetpts[idx]
+            'jet_pts': self.jetpts[idx],
+            'jet_etas': self.jetetas[idx],
+            'jet_phis': self.jetphis[idx]
         }
         sample.update({
             'weights_' + name: self.weights[name][idx] for name in self.weights.dtype.names})
