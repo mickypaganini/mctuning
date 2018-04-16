@@ -18,7 +18,7 @@ from tqdm import tqdm
 from itertools import izip
 
 from dataprep import load_data
-from models import DoubleLSTM, NTrackModel
+from models import DoubleLSTM, NTrackModel, Conv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
 
@@ -103,6 +103,11 @@ def predict(model, data, batch_size, classname, volatile):
         # unsorted_lengths = Variable(data['unsorted_lengths'].type(customLongTensor), volatile=volatile)
         unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
         predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
+    
+    elif isinstance(model, Conv1DModel):
+        leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
+        subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
+        predictions = model(leading_input, subleading_input, batch_weights)
 
     else:
         raise TypeError
@@ -354,12 +359,12 @@ if __name__ == '__main__':
     parser.add_argument('--nval', type=int, default=100000)
     parser.add_argument('--ntest', type=int, default=100000)
     parser.add_argument('--min-lead-pt', type=int, default=500)
-    parser.add_argument('--batchsize', type=int, default=64)
+    parser.add_argument('--batchsize', type=int, default=256)
     parser.add_argument('--nepochs', type=int, default=100)
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--monitor', type=str, default='roc_auc')
     parser.add_argument('--lr', type=float, default=0.01)
-    parser.add_argument('--model', type=str, default='rnn', help='Either rnn or ntrack')
+    parser.add_argument('--model', type=str, default='rnn', help='One of rnn, ntrack, 1dconv')
     parser.add_argument('--checkpoint', type=str, default='checkpoint')
     # parser.add_argument('--test-iter', type=int, default=2)
     parser.add_argument('--pretrain', action='store_true', help='Load pretrained weights')
@@ -367,8 +372,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # check arguments
-    if args.model not in ['rnn', 'ntrack']:
-        raise ValueError('--model can only be one of ["rnn", "ntrack"]')
+    if args.model not in ['rnn', 'ntrack', '1dconv']:
+        raise ValueError('--model can only be one of ["rnn", "ntrack", "1dconv"]')
 
     # load or make data
     logger.debug('Loading data')
@@ -404,15 +409,23 @@ if __name__ == '__main__':
     # initialize model
     if args.model == 'rnn': 
         model = DoubleLSTM(input_size=2, #10
-                        output_size=10,
-                        num_layers=1,
-                        dropout=0.3,
-                        bidirectional=True,
-                        batch_size=args.batchsize,
-                        tagger_output_size=1
+                           output_size=10,
+                           num_layers=1,
+                           dropout=0.3,
+                           bidirectional=True,
+                           batch_size=args.batchsize,
+                           tagger_output_size=1
         )
-    else:
+    elif args.model == 'ntrack':
         model = NTrackModel(input_size=2)
+    else:
+        model = Conv1DModel(input_size=10,
+                            hidden_size=4,
+                            rnn_output_size=10,
+                            kernel_size=2,
+                            dropout=0.2,
+                            bidirectional=True
+        )
 
     if torch.cuda.is_available():
         model.cuda() # move model to GPU
@@ -445,7 +458,6 @@ if __name__ == '__main__':
         patience=args.patience,
         monitor=args.monitor
     )
-
 
     # test
     logger.debug('Testing')

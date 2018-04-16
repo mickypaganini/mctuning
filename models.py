@@ -247,8 +247,8 @@ class Conv1DModel(nn.Module):
         super(Conv1DModel, self).__init__()
 
         # members
-        self.conv1 = nn.Conv1D(input_size, hidden_size, kernel_size)
-        self.conv2 = nn.Conv1D(input_size, hidden_size, kernel_size)
+        self.conv1 = nn.Conv1d(input_size, hidden_size, kernel_size)
+        self.conv2 = nn.Conv1d(input_size, hidden_size, kernel_size)
         self.rnn1 = nn.GRU(
             input_size=hidden_size,
             hidden_size=rnn_output_size,
@@ -263,11 +263,39 @@ class Conv1DModel(nn.Module):
             dropout=dropout,
             bidirectional=bidirectional
         )
-        def forward(self, leading_jets, subleading_jets, batch_weights):
-            batch_size = batch_weights.shape[0]
-            c1 = self.conv1(leading_jets.transpose(1, 2)) # swap seq_length and features
-            c2 = self.conv2(subleading_jets.transpose(1, 2))
-            r1 = self.rnn1(c1.transpose(1, 2)) # swap back
-            r2 = self.rnn2(c2.transpose(1, 2))
-            
-            
+        self.n_directions = 2 if bidirectional else 1
+        self.dense = nn.Linear(
+            # (3 *) because of torch.cat; (* 2) because of 2 streams
+            3 * (rnn_output_size * self.n_directions * 2),
+            32
+        )
+        self.dropout = nn.Dropout(p=0.5)
+        self.dropout1 = nn.Dropout(p=0.5)
+        self.dense2 = nn.Linear(32, 1)
+
+
+    def forward(self, leading_jets, subleading_jets, batch_weights):
+        batch_size = batch_weights.shape[1]
+        c1 = self.conv1(leading_jets.transpose(1, 2)) # swap seq_length and features
+        c2 = self.conv2(subleading_jets.transpose(1, 2))
+        
+        # take the last time step only
+        _, r1 = self.rnn1(c1.transpose(1, 2)) # swap back
+        _, r2 = self.rnn2(c2.transpose(1, 2))
+        r1 = r1[-self.n_directions:].transpose(0, 1).contiguous().view(batch_size, -1) # [b, dir x feats]
+        r2 = r2[-self.n_directions:].transpose(0, 1).contiguous().view(batch_size, -1)
+        # concat rnn outputs
+        hidden = torch.cat([r1, r2], 1)
+        
+        # batch-level features
+        batch_mean = batch_weights.mm(hidden).expand(
+            batch_size, hidden.shape[-1])
+        batch_second_moment = batch_weights.mm(
+            torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
+        batch_std = batch_second_moment - torch.pow(batch_mean, 2)
+        
+        all_features = torch.cat([batch_mean, batch_std, hidden], 1)
+        
+        # fully-connected layers
+        outputs = self.dense2(self.dropout1(F.relu(self.dense(self.dropout(all_features)))))
+        return outputs
