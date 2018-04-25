@@ -214,9 +214,10 @@ class DijetDataset(Dataset):
                 self.lengths = self.lengths[self.jetpts[:, 0] > min_lead_pt]
                 self.nparticles = self.nparticles[self.jetpts[:, 0] > min_lead_pt]
                 self.weights = self.weights[self.jetpts[:, 0] > min_lead_pt]
-                self.jetpts = self.jetpts[self.jetpts[:, 0] > min_lead_pt]
                 self.jetetas = self.jetetas[self.jetpts[:, 0] > min_lead_pt]
                 self.jetphis = self.jetphis[self.jetpts[:, 0] > min_lead_pt]
+                # last
+                self.jetpts = self.jetpts[self.jetpts[:, 0] > min_lead_pt]
                 
     def to_dict(self):
         """
