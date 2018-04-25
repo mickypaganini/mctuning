@@ -485,12 +485,12 @@ if __name__ == '__main__':
     # check performance
     y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
     y_score = np.concatenate((pred_baseline, pred_variation))
-    logger.info(roc_auc_score(
+    logger.info('ROC {} = {}'.format(varID_1, roc_auc_score(
         y_true,
         y_score,
         # average='weighted',
         sample_weight=np.concatenate( (weights_baseline, weights_variation) )
-    ))
+    )))
     plotting.plot_output(
         np.array(pred_baseline).ravel(),
         np.array(pred_variation).ravel(),
