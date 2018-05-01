@@ -464,43 +464,61 @@ if __name__ == '__main__':
     # pred_baseline, pred_variation, weights_baseline, weights_variation,\
     # features_baseline, features_variation = multitest(model,
     #     dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
-#        dataloader_0, dataloader_1, args.class0, args.class1, times=args.test_iter) 
-    pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
-        dataloader_test_0, dataloader_test_1, args.class0, args.class1)
+    #        dataloader_0, dataloader_1, args.class0, args.class1, times=args.test_iter) 
 
-    # plot hidden features
-    # plotting.plot_batch_features(
-    #     np.concatenate(features_baseline, axis=0),
-    #     np.concatenate(features_variation, axis=0),
-    #     varID_0,
-    #     varID_1,
-    #     np.array(weights_baseline[-1]).ravel(),
-    #     np.array(weights_variation[-1]).ravel(),
-    #     args.model
-    # )
+    # bootstrap the AUC and its uncertainty due to the random batches
+    rocs = []
+    for i_bs in range(10): 
+        pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
+            dataloader_test_0, dataloader_test_1, args.class0, args.class1)
 
-    # np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
-    # np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
+        # plot hidden features
+        # plotting.plot_batch_features(
+        #     np.concatenate(features_baseline, axis=0),
+        #     np.concatenate(features_variation, axis=0),
+        #     varID_0,
+        #     varID_1,
+        #     np.array(weights_baseline[-1]).ravel(),
+        #     np.array(weights_variation[-1]).ravel(),
+        #     args.model
+        # )
+        
+        # np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
+        # np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
+        
+        # check performance
+        y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
+        y_score = np.concatenate((pred_baseline, pred_variation))
+        #logger.info('ROC {} = {}'.format(varID_1, roc_auc_score(
+        #    y_true,
+        #    y_score,
+        #    # average='weighted',
+        #    sample_weight=np.concatenate( (weights_baseline, weights_variation) )
+        #)))
+        # only plot once
+        if i_bs == 0:
+            plotting.plot_output(
+                np.array(pred_baseline).ravel(),
+                np.array(pred_variation).ravel(),
+                varID_0,
+                varID_1,
+                np.array(weights_baseline).ravel(),
+                np.array(weights_variation).ravel(),
+                args.model,
+            )
+        rocs.append(roc_auc_score(
+            y_true,
+            y_score,
+            sample_weight=np.concatenate( (weights_baseline, weights_variation) )
+        ))
 
-    # check performance
-    y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
-    y_score = np.concatenate((pred_baseline, pred_variation))
-    logger.info('ROC {} = {}'.format(varID_1, roc_auc_score(
-        y_true,
-        y_score,
-        # average='weighted',
-        sample_weight=np.concatenate( (weights_baseline, weights_variation) )
-    )))
-    plotting.plot_output(
-        np.array(pred_baseline).ravel(),
-        np.array(pred_variation).ravel(),
-        varID_0,
+    # get bootstrap results
+    logger.info('ROC {} = {} +- {}'.format(
         varID_1,
-        np.array(weights_baseline).ravel(),
-        np.array(weights_variation).ravel(),
-        args.model,
+        np.mean(rocs)),
+        np.std(rocs)/np.sqrt(len(rocs)) # systematic uncertainty due to batching
     )
-
+            
     # for t in range(args.test_iter):
     #     plotting.plot_output(
     #         np.array(pred_baseline[t]).ravel(),
