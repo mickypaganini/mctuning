@@ -13,6 +13,7 @@ import numpy as np
 import logging
 import sys
 import os
+from time import time
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 from itertools import izip
@@ -21,6 +22,9 @@ from dataprep import load_data
 from models import DoubleLSTM, NTrackModel, Conv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
+
+TIME = str(int(time()))
+safe_mkdir('history')
 
 # logging
 configure_logging()
@@ -298,7 +302,36 @@ def train(model,
             loss_val = float(loss_val) / (batch_idx_val + 1.) # / n_validation)
             logger.info('Epoch {}: Validation Loss = {:0.5f}'.format(epoch, loss_val))
 
-            # early stopping
+            # log history
+            val_file = os.path.join('history', checkpoint_path.split('/')[-1].split('.')[0] + '_val.txt')
+            train_file = os.path.join('history', checkpoint_path.split('/')[-1].split('.')[0] + '_train.txt')
+            roc_file = os.path.join('history', checkpoint_path.split('/')[-1].split('.')[0] + '_ROCval.txt')
+
+            y_true = np.concatenate((np.zeros(len(scores_baseline)), np.ones(len(scores_variation))))
+            y_score = np.concatenate((scores_baseline, scores_variation))
+            roc_score = roc_auc_score(
+                y_true,
+                y_score,
+                sample_weight=np.concatenate( (weights_baseline, weights_variation) )
+            )
+
+            def _write_history(loss, filepath):
+                if os.path.isfile(filepath):
+                    f = open(filepath, "a+")
+                    f.write(str(loss) + ', ')
+                    f.close()
+                else:
+                    with open(filepath, "w") as f:
+                        f.write(str(loss) + ', ')
+
+            _write_history(loss_val, val_file)
+            _write_history(
+                (batch_weighted_loss_baseline_epoch + batch_weighted_loss_variation_epoch) / (2. * n_training),
+                train_file
+            )
+            _write_history(roc_score, roc_file)
+            
+            # early stopping 
             if monitor == 'val_loss':
                 if loss_val < best_loss:
                     logger.info('Validation loss improved from {:0.5f} to {:0.5f}'.format(best_loss, loss_val))
@@ -312,14 +345,8 @@ def train(model,
                     if wait >= patience - 1:
                         logger.info('Stopping early.')
                         break
+
             elif monitor == 'roc_auc':
-                y_true = np.concatenate((np.zeros(len(scores_baseline)), np.ones(len(scores_variation))))
-                y_score = np.concatenate((scores_baseline, scores_variation))
-                roc_score = roc_auc_score(
-                    y_true,
-                    y_score,
-                    sample_weight=np.concatenate( (weights_baseline, weights_variation) )
-                )
                 if roc_score > best_roc:
                     logger.info('Validation ROC AUC improved from {:0.5f} to {:0.5f}'.format(best_roc, roc_score))
                     best_roc = roc_score
@@ -460,7 +487,7 @@ if __name__ == '__main__':
     )
 
     # test
-    logger.debug('Testing')
+    logger.info('Testing')
     # pred_baseline, pred_variation, weights_baseline, weights_variation,\
     # features_baseline, features_variation = multitest(model,
     #     dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
@@ -469,6 +496,7 @@ if __name__ == '__main__':
     # bootstrap the AUC and its uncertainty due to the random batches
     rocs = []
     for i_bs in range(10): 
+        logger.debug('Test iteration {}'.format(i_bs))
         pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
             dataloader_test_0, dataloader_test_1, args.class0, args.class1)
 
