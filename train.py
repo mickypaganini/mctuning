@@ -448,7 +448,7 @@ if __name__ == '__main__':
     else:
         model = Conv1DModel(input_size=10,
                             hidden_size=4,
-                            rnn_output_size=10,
+                            rnn_output_size=4,
                             kernel_size=2,
                             dropout=0.2,
                             bidirectional=True
@@ -543,9 +543,9 @@ if __name__ == '__main__':
     # get bootstrap results
     logger.info('ROC {} = {} +- {}'.format(
         varID_1,
-        np.mean(rocs)),
+        np.mean(rocs),
         np.std(rocs)/np.sqrt(len(rocs)) # systematic uncertainty due to batching
-    )
+    ))
             
     # for t in range(args.test_iter):
     #     plotting.plot_output(
