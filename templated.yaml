@@ -1,0 +1,27 @@
+# Example configuration for Pythia in YAML.
+
+Beams:eCM: 13000
+Next:numberShowInfo: 0
+Next:numberShowEvent: 0
+Next:numberShowLHA: 0
+Next:numberShowProcess: 0
+Next:numberCount: 0
+HardQCD:all: on
+PhaseSpace:pTHatMin: 500
+PhaseSpace:pTHatMax: 1000
+UncertaintyBands:doVariations: on
+Proposals:
+  fsr:muRfac:
+    dist: scipy.stats.uniform
+    kwargs:
+      loc: 0.5
+      scale: 1.5
+    min: 0
+    max: 130
+  isr:muRfac:
+    values: 
+      - 0.1
+      - 0.2
+      - 0.9
+NumSamples: 4
+Mode: sample # or grid
