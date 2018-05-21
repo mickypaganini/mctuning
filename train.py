@@ -19,7 +19,7 @@ from tqdm import tqdm
 from itertools import izip
 
 from dataprep import load_data
-from models import DoubleLSTM, NTrackModel, Conv1DModel
+from models import DoubleLSTM, NTrackModel, BeefyConv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
 
@@ -108,7 +108,7 @@ def predict(model, data, batch_size, classname, volatile):
         unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
         predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
     
-    elif isinstance(model, Conv1DModel):
+    elif isinstance(model, BeefyConv1DModel):
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
         predictions = model(leading_input, subleading_input, batch_weights)
@@ -446,11 +446,11 @@ if __name__ == '__main__':
     elif args.model == 'ntrack':
         model = NTrackModel(input_size=2)
     else:
-        model = Conv1DModel(input_size=10,
-                            hidden_size=4,
-                            rnn_output_size=4,
+        model = BeefyConv1DModel(input_size=10,
+                            hidden_size=10,
+                            rnn_output_size=10,
                             kernel_size=2,
-                            dropout=0.2,
+                            dropout=0.3,
                             bidirectional=True
         )
 
