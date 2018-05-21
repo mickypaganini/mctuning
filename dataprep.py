@@ -10,6 +10,7 @@ Author: Michela Paganini (michela.paganini@yale.edu)
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
 import operator
 import os
@@ -327,14 +328,81 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             with h5py.File(dataset_string) as f:
                 for key, value in d.to_dict().iteritems():
                     f[key] = value
-        pin_memory = True if torch.cuda.is_available() else False
+        # pin_memory = True if torch.cuda.is_available() else False
+        pin_memory = False
 
         # return a PyTorch DataLoader from the DijetDataset above
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=True,
-                    num_workers=6,
-                    # num_workers=0,
+                    # num_workers=6,
+                    num_workers=0,
                     pin_memory=pin_memory) # for GPU
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest), varID
+
+
+
+def make_cv_dataloaders(dataset, batchsize=128, train_size=0.7, nfolds=10, 
+                        pin_memory=False, num_workers=6):
+    """Takes a dataset and returns an iterator of tuples of dataloaders:
+
+    [
+        (train_dataloader, val_dataloader, test_dataloader), 
+        (train_dataloader, val_dataloader, test_dataloader), 
+        ...
+    ]
+
+    where each tuple is a round of crossvalidation. The number of triplets
+    returned is equal to the nfolds passed in
+
+    """
+    from sklearn.model_selection import KFold, train_test_split
+
+    class ShapeProxy(object):
+        """
+        Make a dummy shape so sklearn doesnt get grumpy
+        """
+        def __init__(self, shape=None):
+            self.shape = shape
+
+        def __getitem__(self, *args):
+            pass
+
+    kf = KFold(nfolds, shuffle=True)
+    shape = ShapeProxy((len(dataset), 1))
+    dataloaders = []
+    
+    for train_val_idx, test_idx in kf.split(shape):
+        train_idx, val_idx = train_test_split(train_val_idx, 
+                                              train_size=train_size)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batchsize,
+            shuffle=False, # This is OK due to the sampler def'd below
+            num_workers=num_workers,
+            pin_memory=pin_memory, 
+            sampler=SubsetRandomSampler(train_idx)
+        )
+
+        dataloader_val = DataLoader(
+            dataset,
+            batch_size=batchsize,
+            shuffle=False, # This is OK due to the sampler def'd below
+            num_workers=num_workers,
+            pin_memory=pin_memory, 
+            sampler=SubsetRandomSampler(val_idx)
+        )
+
+        dataloader_test = DataLoader(
+            dataset,
+            batch_size=batchsize,
+            shuffle=False, # This is OK due to the sampler def'd below
+            num_workers=num_workers,
+            pin_memory=pin_memory, 
+            sampler=SubsetRandomSampler(test_idx)
+        )
+        # dataloaders.append((dataloader, dataloader_val, dataloader_test))
+        yield (dataloader, dataloader_val, dataloader_test)
+
+    # return dataloaders
