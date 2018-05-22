@@ -415,7 +415,7 @@ def run_single_experiment(args, varID_0, varID_1, dataloader_0, dataloader_1,
     safe_mkdir('checkpoints')
     checkpoint_path = os.path.join(
         'checkpoints',
-        args.checkpoint + '_' + args.model + '_' + varID_0 + '_' + varID_1 + '.pth'
+        args.checkpoint + '_exp' + str(experiment_id) + '_' + args.model + '_' + varID_0 + '_' + varID_1 + '.pth'
     )
     if args.pretrain and os.path.exists(checkpoint_path):
         logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
