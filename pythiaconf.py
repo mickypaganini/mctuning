@@ -84,3 +84,17 @@ def create_dataset_hash(cfg, extra_args=None):
     md5 = hashlib.md5()
     md5.update(encoding)
     return md5.hexdigest()[:7]
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) == 1:
+        print 'Usage: {} FILE.yaml [FILE2.yaml ...]'.format(sys.argv[0])
+        sys.exit(2)
+    for fname in sys.argv[1:]:
+        hashname = create_dataset_hash(
+            read_pythia_from_yaml(fname)[1], 
+            extra_args={'nevents': 100000, 'max_len': 100, 'min_lead_pt': 500}
+        )
+        print '{}: {}'.format(fname, hashname)
+    
+    

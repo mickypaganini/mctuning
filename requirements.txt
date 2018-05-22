@@ -1,6 +1,10 @@
-matplotlib==2.0.2
-numpy==1.13.3
+matplotlib==2.1.2
+numpy==1.14.1
+h5py==2.7.1
+torch==0.3.1
+joblib==0.11
 numpythia==0.3.3
 pyjet==1.0.1
-torch==0.3.0.post4
+tqdm==4.19.6
+scikit_learn==0.19.1
 PyYAML==3.12
