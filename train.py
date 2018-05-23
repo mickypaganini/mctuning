@@ -20,7 +20,7 @@ from itertools import izip
 from joblib import Parallel, delayed
 
 from dataprep import load_data, make_cv_dataloaders, DijetDataset
-from models import DoubleLSTM, NTrackModel, Conv1DModel
+from models import DoubleLSTM, NTrackModel, BeefyConv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
 
@@ -399,7 +399,7 @@ def run_single_experiment(args, varID_0, varID_1, dataloader_0, dataloader_1,
     elif args.model == 'ntrack':
         model = NTrackModel(input_size=2)
     else:
-        model = Conv1DModel(input_size=10,
+        model = BeefyConv1DModel(input_size=10,
                             hidden_size=4,
                             rnn_output_size=4,
                             kernel_size=2,
