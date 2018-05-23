@@ -254,6 +254,16 @@ class DijetDataset(Dataset):
             field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not (hasattr(dicts[0][field], 'shape') and dicts[0][field].shape)
         })
         return DijetDataset.from_dict(output_dict)
+
+    def take_slice(self, indices):
+        indices = np.array(indices)
+        d = self.to_dict()
+        for k in d:
+            if k != 'nevents':
+                d[k] = d[k][indices]
+        
+        d['nevents'] = len(indices)
+        return self.__class__.from_dict(d)
         
     def __len__(self):
         return self.nevents
@@ -377,30 +387,27 @@ def make_cv_dataloaders(dataset, batchsize=128, train_size=0.7, nfolds=10,
         train_idx, val_idx = train_test_split(train_val_idx, 
                                               train_size=train_size)
         dataloader = DataLoader(
-            dataset,
+            dataset.take_slice(train_idx),
             batch_size=batchsize,
-            shuffle=False, # This is OK due to the sampler def'd below
+            shuffle=True,
             num_workers=num_workers,
-            pin_memory=pin_memory, 
-            sampler=SubsetRandomSampler(train_idx)
+            pin_memory=pin_memory
         )
 
         dataloader_val = DataLoader(
-            dataset,
+            dataset.take_slice(val_idx),
             batch_size=batchsize,
-            shuffle=False, # This is OK due to the sampler def'd below
+            shuffle=True,
             num_workers=num_workers,
-            pin_memory=pin_memory, 
-            sampler=SubsetRandomSampler(val_idx)
+            pin_memory=pin_memory
         )
 
         dataloader_test = DataLoader(
-            dataset,
+            dataset.take_slice(test_idx),
             batch_size=batchsize,
-            shuffle=False, # This is OK due to the sampler def'd below
+            shuffle=True,
             num_workers=num_workers,
-            pin_memory=pin_memory, 
-            sampler=SubsetRandomSampler(test_idx)
+            pin_memory=pin_memory
         )
         # dataloaders.append((dataloader, dataloader_val, dataloader_test))
         yield (dataloader, dataloader_val, dataloader_test)
