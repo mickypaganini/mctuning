@@ -19,7 +19,7 @@ from tqdm import tqdm
 from itertools import izip
 from joblib import Parallel, delayed
 
-from dataprep import load_data, make_cv_dataloaders
+from dataprep import load_data, make_cv_dataloaders, DijetDataset
 from models import DoubleLSTM, NTrackModel, Conv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
@@ -220,8 +220,10 @@ def train(model,
     if override_logger:
         logger = override_logger
 
+    # TODO: this is currently wrong but will be right once I change the Dataloade/dataset creation
     n_validation = min(len(validation_data_0.dataset), len(validation_data_1.dataset)) 
     n_training = min(len(train_data_0.dataset), len(train_data_1.dataset)) 
+    
     best_loss = np.inf
     best_roc = 0.
     wait = 0
@@ -535,6 +537,7 @@ if __name__ == '__main__':
     if varID_0 == varID_1:
         logger.warning('Requested classification of datasets with identical parameters!')
 
+    '''
     logger.debug('Plotting distributions')
     plotting.plot_weights(
         dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
@@ -552,7 +555,7 @@ if __name__ == '__main__':
         dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
         dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
         varID_0, varID_1, args.class0, args.class1)
-
+    '''
 
     # We don't change the dataloading / regeneration semantics, we'll just
     # apply some clever crossvaliation to each variation . We'll throw away the
@@ -566,9 +569,10 @@ if __name__ == '__main__':
     datasets_1 = [dataloader_1.dataset, dataloader_val_1.dataset, 
                   dataloader_test_1.dataset]
 
-    combined_dataset_0 = torch.utils.data.ConcatDataset(datasets_0)
-    combined_dataset_1 = torch.utils.data.ConcatDataset(datasets_1)
-
+    #combined_dataset_0 = torch.utils.data.ConcatDataset(datasets_0)
+    #combined_dataset_1 = torch.utils.data.ConcatDataset(datasets_1)
+    combined_dataset_0 = DijetDataset.concat(datasets_0)
+    combined_dataset_1 = DijetDataset.concat(datasets_1)
     
     pin_memory = True if torch.cuda.is_available() else False
 
@@ -592,19 +596,41 @@ if __name__ == '__main__':
         num_workers=args.dataloader_workers
     )
 
-    experiment_runs = [
-        run_single_experiment(
-            args, varID_0, varID_1, 
-            dataloader_0=d_0, 
-            dataloader_1=d_1, 
-            dataloader_val_0=d_val_0, 
-            dataloader_val_1=d_val_1, 
-            dataloader_test_0=d_test_0,
-            dataloader_test_1=d_test_1, 
-            experiment_id=i
+    
+    experiment_runs = []
+    for i, ((d_0, d_val_0, d_test_0), (d_1, d_val_1, d_test_1)) in enumerate(izip(dataloaders_0, dataloaders_1)):
+        plotting.plot_weights(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, exp=i)
+        plotting.plot_jetn_trkn(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, jetn=0, trkn=0, exp=i)
+        plotting.plot_jetn_trkn(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, jetn=1, trkn=0, exp=i)
+        plotting.plot_ntrack(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, exp=i)
+ 
+        experiment_runs.append(
+            run_single_experiment(
+                args, varID_0, varID_1, 
+                dataloader_0=d_0, 
+                dataloader_1=d_1, 
+                dataloader_val_0=d_val_0, 
+                dataloader_val_1=d_val_1, 
+                dataloader_test_0=d_test_0,
+                dataloader_test_1=d_test_1, 
+                experiment_id=i
+            )
         )
-        for i, ((d_0, d_val_0, d_test_0), (d_1, d_val_1, d_test_1)) in enumerate(izip(dataloaders_0, dataloaders_1))
-    ]
+     
+   #for i, ((d_0, d_val_0, d_test_0), (d_1, d_val_1, d_test_1)) in enumerate(izip(dataloaders_0, dataloaders_1))
+    #]
 
     logger.info('{} experiments finished. Results:'.format(len(experiment_runs)))
 

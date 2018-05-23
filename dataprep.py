@@ -248,10 +248,10 @@ class DijetDataset(Dataset):
         dicts = [d.to_dict() for d in sequence]
         output_dict = {
             field : np.concatenate(tuple(dic[field] for dic in dicts), axis=0)
-                for field in dicts[0].keys() if dicts[0][field].shape
+                for field in dicts[0].keys() if (hasattr(dicts[0][field], 'shape') and dicts[0][field].shape)
         }
         output_dict.update({
-            field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not dicts[0][field].shape
+            field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not (hasattr(dicts[0][field], 'shape') and dicts[0][field].shape)
         })
         return DijetDataset.from_dict(output_dict)
         
