@@ -33,6 +33,16 @@ import multiprocessing
 configure_logging()
 logger = logging.getLogger("Data Preparation")
 
+def delayed_iter(it, time_delay=2):
+    """
+    Can't believe this is necessary, but Pythia doesnt do PID / thread ID 
+    unique seeds, so we need to delay launching.
+    """
+    import time
+    for el in it:
+        time.sleep(time_delay)
+        yield el
+
 def deltaR(eta1, eta2, phi1, phi2):
     import math
     '''
@@ -332,7 +342,9 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         else:
             ncpu = multiprocessing.cpu_count() - 1 
             dataset_list = Parallel(n_jobs=ncpu, verbose=True)(delayed(DijetDataset)(
-                temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(ncpu))
+                temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) 
+                for _ in delayed_iter(range(ncpu), time_delay=5.0)
+            )
             d = DijetDataset.concat(dataset_list)
             #pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
             with h5py.File(dataset_string) as f:
