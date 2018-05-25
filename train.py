@@ -113,10 +113,11 @@ def predict(model, data, batch_size, classname, volatile):
         unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
         predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
     
-    elif isinstance(model, Conv1DModel):
+    elif isinstance(model, BeefyConv1DModel):
+        ntrk_inputs = Variable(data['nparticles'].type(customFloatTensor), volatile=volatile)
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
-        predictions = model(leading_input, subleading_input, batch_weights)
+        predictions = model(ntrk_inputs, leading_input, subleading_input, batch_weights)
 
     else:
         raise TypeError
@@ -399,12 +400,13 @@ def run_single_experiment(args, varID_0, varID_1, dataloader_0, dataloader_1,
     elif args.model == 'ntrack':
         model = NTrackModel(input_size=2)
     else:
-        model = BeefyConv1DModel(input_size=10,
-                            hidden_size=4,
-                            rnn_output_size=4,
-                            kernel_size=2,
-                            dropout=0.2,
-                            bidirectional=True
+        model = BeefyConv1DModel(ntrk_input_size=2,
+                                 input_size=10,
+                                 hidden_size=4,
+                                 rnn_output_size=4,
+                                 kernel_size=2,
+                                 dropout=0.2,
+                                 bidirectional=True
         )
     if torch.cuda.is_available():
         model.cuda() # move model to GPU
