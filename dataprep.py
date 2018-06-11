@@ -267,11 +267,11 @@ class DijetDataset(Dataset):
 
     def take_slice(self, indices):
         indices = np.array(indices)
-        d = self.to_dict()
-        for k in d:
-            if k != 'nevents':
-                d[k] = d[k][indices]
-        
+        #d = self.to_dict()
+        d = {k : self.__dict__[k][indices] for k in self.__dict__ if k != 'nevents'}
+        #for k in d:
+        #    if k != 'nevents':
+        #        d[k] = d[k][indices]
         d['nevents'] = len(indices)
         return self.__class__.from_dict(d)
         
@@ -343,7 +343,7 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
             ncpu = multiprocessing.cpu_count() - 1 
             dataset_list = Parallel(n_jobs=ncpu, verbose=True)(delayed(DijetDataset)(
                 temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) 
-                for _ in delayed_iter(range(ncpu), time_delay=5.0)
+                for _ in delayed_iter(range(ncpu), time_delay=2.0)
             )
             d = DijetDataset.concat(dataset_list)
             #pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
