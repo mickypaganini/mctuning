@@ -17,9 +17,10 @@ from time import time
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 from itertools import izip
+from joblib import Parallel, delayed
 
-from dataprep import load_data
-from models import DoubleLSTM, NTrackModel, Conv1DModel
+from dataprep import load_data, make_cv_dataloaders, DijetDataset
+from models import DoubleLSTM, NTrackModel, BeefyConv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
 
@@ -29,6 +30,10 @@ safe_mkdir('history')
 # logging
 configure_logging()
 logger = logging.getLogger("Main")
+
+def reset_logger():
+    global logger
+    logger = logging.getLogger("Main")
 
 customFloatTensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
 customLongTensor = torch.cuda.LongTensor if torch.cuda.is_available() else torch.LongTensor
@@ -102,16 +107,18 @@ def predict(model, data, batch_size, classname, volatile):
         predictions = model(inputs, batch_weights, batch_size)#)#.data.numpy()
 
     elif isinstance(model, DoubleLSTM):
+        ntrk_inputs = Variable(data['nparticles'].type(customFloatTensor), volatile=volatile)
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
         # unsorted_lengths = Variable(data['unsorted_lengths'].type(customLongTensor), volatile=volatile)
         unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
-        predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
+        predictions = model(ntrk_inputs, leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
     
-    elif isinstance(model, Conv1DModel):
+    elif isinstance(model, BeefyConv1DModel):
+        ntrk_inputs = Variable(data['nparticles'].type(customFloatTensor), volatile=volatile)
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
-        predictions = model(leading_input, subleading_input, batch_weights)
+        predictions = model(ntrk_inputs, leading_input, subleading_input, batch_weights)
 
     else:
         raise TypeError
@@ -206,14 +213,19 @@ def train(model,
         checkpoint_path,
         epochs=100,
         patience=5,
-        monitor='roc_auc'):
+        monitor='roc_auc', override_logger=None):
     '''
     train_data = dataloader
     validation_data = dataloader_val
     '''
 
-    n_validation = min(validation_data_0.dataset.nevents, validation_data_1.dataset.nevents) 
-    n_training = min(train_data_0.dataset.nevents, train_data_1.dataset.nevents) 
+    if override_logger:
+        logger = override_logger
+
+    # TODO: this is currently wrong but will be right once I change the Dataloade/dataset creation
+    n_validation = min(len(validation_data_0.dataset), len(validation_data_1.dataset)) 
+    n_training = min(len(train_data_0.dataset), len(train_data_1.dataset)) 
+    
     best_loss = np.inf
     best_roc = 0.
     wait = 0
@@ -369,6 +381,118 @@ def train(model,
     model.load_state_dict(torch.load(checkpoint_path))
 
 
+def run_single_experiment(args, varID_0, varID_1, dataloader_0, dataloader_1, 
+                          dataloader_val_0, dataloader_val_1, dataloader_test_0,
+                          dataloader_test_1, experiment_id=None):
+
+    if experiment_id is not None:
+        global logger
+        logger = logger.getChild('experiment_id={}'.format(experiment_id))
+    # initialize model
+    if args.model == 'rnn': 
+        model = DoubleLSTM(ntrk_input_size=2,
+                           input_size=2, #10
+                           output_size=10,
+                           num_layers=1,
+                           dropout=0.3,
+                           bidirectional=True,
+                           batch_size=args.batchsize,
+                           tagger_output_size=1
+        )
+    elif args.model == 'ntrack':
+        model = NTrackModel(input_size=2)
+    else:
+        model = BeefyConv1DModel(ntrk_input_size=2,
+                                 input_size=10,
+                                 hidden_size=4,
+                                 rnn_output_size=4,
+                                 kernel_size=2,
+                                 dropout=0.2,
+                                 bidirectional=True
+        )
+    if torch.cuda.is_available():
+        model.cuda() # move model to GPU
+        logger.info('Running on GPU')
+        
+    optimizer = optim.RMSprop(model.parameters(), lr=args.lr, momentum=0.0)
+    # optimizer = optim.SGD(model.parameters(), lr=args.lr)#, momentum=0.95, nesterov=True)
+    logger.debug('Model: {}'.format(model))
+
+    safe_mkdir('checkpoints')
+    checkpoint_path = os.path.join(
+        'checkpoints',
+        args.checkpoint + '_exp' + str(experiment_id) + '_' + args.model + '_' + varID_0 + '_' + varID_1 + '.pth'
+    )
+    if args.pretrain and os.path.exists(checkpoint_path):
+        logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
+        model.load_state_dict(torch.load(checkpoint_path))
+    else:
+        logger.info('Training from scratch')
+
+    # train
+    train(model,
+        optimizer,
+        args.class0, args.class1,
+        varID_0, varID_1,
+        dataloader_0, dataloader_1, 
+        dataloader_val_0, dataloader_val_1,
+        checkpoint_path=checkpoint_path,
+        epochs=args.nepochs,
+        patience=args.patience,
+        monitor=args.monitor, 
+        override_logger=logger
+    )
+
+    # test
+    logger.info('Testing')
+    
+    # bootstrap the AUC and its uncertainty due to the random batches
+    rocs = []
+    for i_bs in range(10): 
+        logger.debug('Test iteration {}'.format(i_bs))
+        pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
+            dataloader_test_0, dataloader_test_1, args.class0, args.class1
+        )
+
+        # check performance
+        y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
+        y_score = np.concatenate((pred_baseline, pred_variation))
+
+        # only plot once
+        if i_bs == 0:
+            plotting.plot_output(
+                np.array(pred_baseline).ravel(),
+                np.array(pred_variation).ravel(),
+                varID_0,
+                varID_1,
+                np.array(weights_baseline).ravel(),
+                np.array(weights_variation).ravel(),
+                args.model,
+            )
+        rocs.append(roc_auc_score(
+            y_true,
+            y_score,
+            sample_weight=np.concatenate( (weights_baseline, weights_variation) )
+        ))
+
+    roc_auc_est = np.mean(rocs)
+    roc_auc_err = np.std(rocs)/np.sqrt(len(rocs)) # systematic uncertainty due to batching
+    # get bootstrap results
+    logger.info('ROC {} = {} +- {}'.format(
+        varID_1,
+        roc_auc_est,
+        roc_auc_err
+    ))
+
+    reset_logger()
+    
+    return {
+        'variation': varID_1, 
+        'ROC_AUC': roc_auc_est, 
+        'ROC_AUC_Err': roc_auc_err, 
+        'experiment_id': experiment_id
+    }
+
 if __name__ == '__main__':
 
     import argparse
@@ -385,6 +509,8 @@ if __name__ == '__main__':
     parser.add_argument('--ntrain', type=int, default=100000)
     parser.add_argument('--nval', type=int, default=100000)
     parser.add_argument('--ntest', type=int, default=100000)
+    parser.add_argument('--nfolds', type=int, default=10)
+    parser.add_argument('--dataloader-workers', '-j', type=int, default=6, help='Number of DataLoader workers')
     parser.add_argument('--min-lead-pt', type=int, default=500)
     parser.add_argument('--batchsize', type=int, default=256)
     parser.add_argument('--nepochs', type=int, default=100)
@@ -415,6 +541,7 @@ if __name__ == '__main__':
     if varID_0 == varID_1:
         logger.warning('Requested classification of datasets with identical parameters!')
 
+    '''
     logger.debug('Plotting distributions')
     plotting.plot_weights(
         dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
@@ -432,138 +559,90 @@ if __name__ == '__main__':
         dataloader_0.dataset, dataloader_val_0.dataset, dataloader_test_0.dataset,
         dataloader_1.dataset, dataloader_val_1.dataset, dataloader_test_1.dataset,
         varID_0, varID_1, args.class0, args.class1)
+    '''
 
-    # initialize model
-    if args.model == 'rnn': 
-        model = DoubleLSTM(input_size=2, #10
-                           output_size=10,
-                           num_layers=1,
-                           dropout=0.3,
-                           bidirectional=True,
-                           batch_size=args.batchsize,
-                           tagger_output_size=1
-        )
-    elif args.model == 'ntrack':
-        model = NTrackModel(input_size=2)
-    else:
-        model = Conv1DModel(input_size=10,
-                            hidden_size=4,
-                            rnn_output_size=4,
-                            kernel_size=2,
-                            dropout=0.2,
-                            bidirectional=True
-        )
+    # We don't change the dataloading / regeneration semantics, we'll just
+    # apply some clever crossvaliation to each variation . We'll throw away the
+    # dataloaders built here and reconstruct them later.
+    from torch.utils.data import ConcatDataset
+    from itertools import izip
+    TRAIN_PCT = 0.66
 
-    if torch.cuda.is_available():
-        model.cuda() # move model to GPU
-        logger.info('Running on GPU')
-        
-    optimizer = optim.RMSprop(model.parameters(), lr=args.lr, momentum=0.0)
-    # optimizer = optim.SGD(model.parameters(), lr=args.lr)#, momentum=0.95, nesterov=True)
-    logger.debug('Model: {}'.format(model))
+    datasets_0 = [dataloader_0.dataset, dataloader_val_0.dataset, 
+                  dataloader_test_0.dataset]
+    datasets_1 = [dataloader_1.dataset, dataloader_val_1.dataset, 
+                  dataloader_test_1.dataset]
 
-    safe_mkdir('checkpoints')
-    checkpoint_path = os.path.join(
-        'checkpoints',
-        args.checkpoint + '_' + args.model + '_' + varID_0 + '_' + varID_1 + '.pth'
-    )
-    if args.pretrain and os.path.exists(checkpoint_path):
-        logger.info('Restoring best weights from checkpoint at ' + checkpoint_path)
-        model.load_state_dict(torch.load(checkpoint_path))
-    else:
-        logger.info('Training from scratch')
+    #combined_dataset_0 = torch.utils.data.ConcatDataset(datasets_0)
+    #combined_dataset_1 = torch.utils.data.ConcatDataset(datasets_1)
+    combined_dataset_0 = DijetDataset.concat(datasets_0)
+    combined_dataset_1 = DijetDataset.concat(datasets_1)
+    
+    pin_memory = True if torch.cuda.is_available() else False
 
-    # train
-    train(model,
-        optimizer,
-        args.class0, args.class1,
-        varID_0, varID_1,
-        dataloader_0, dataloader_1, 
-        dataloader_val_0, dataloader_val_1,
-        checkpoint_path=checkpoint_path,
-        epochs=args.nepochs,
-        patience=args.patience,
-        monitor=args.monitor
+    logger.info('creating experiment setup for {}-fold cross-validation'.format(args.nfolds))
+    
+    dataloaders_0 = make_cv_dataloaders(
+        dataset=combined_dataset_0, 
+        batchsize=args.batchsize, 
+        train_size=TRAIN_PCT, 
+        nfolds=args.nfolds, 
+        pin_memory=pin_memory, 
+        num_workers=args.dataloader_workers
     )
 
-    # test
-    logger.info('Testing')
-    # pred_baseline, pred_variation, weights_baseline, weights_variation,\
-    # features_baseline, features_variation = multitest(model,
-    #     dataloader_test_0, dataloader_test_1, args.class0, args.class1, times=args.test_iter)
-    #        dataloader_0, dataloader_1, args.class0, args.class1, times=args.test_iter) 
+    dataloaders_1 = make_cv_dataloaders(
+        dataset=combined_dataset_1, 
+        batchsize=args.batchsize, 
+        train_size=TRAIN_PCT, 
+        nfolds=args.nfolds, 
+        pin_memory=pin_memory, 
+        num_workers=args.dataloader_workers
+    )
 
-    # bootstrap the AUC and its uncertainty due to the random batches
-    rocs = []
-    for i_bs in range(10): 
-        logger.debug('Test iteration {}'.format(i_bs))
-        pred_baseline, pred_variation, weights_baseline, weights_variation = test(model,
-            dataloader_test_0, dataloader_test_1, args.class0, args.class1)
-
-        # plot hidden features
-        # plotting.plot_batch_features(
-        #     np.concatenate(features_baseline, axis=0),
-        #     np.concatenate(features_variation, axis=0),
-        #     varID_0,
-        #     varID_1,
-        #     np.array(weights_baseline[-1]).ravel(),
-        #     np.array(weights_variation[-1]).ravel(),
-        #     args.model
-        # )
-        
-        # np.save('features_baseline.npy', np.concatenate(features_baseline, axis=0))
-        # np.save('features_variation.npy', np.concatenate(features_variation, axis=0))
-        
-        # check performance
-        y_true = np.concatenate((np.zeros(len(pred_baseline)), np.ones(len(pred_variation))))
-        y_score = np.concatenate((pred_baseline, pred_variation))
-        #logger.info('ROC {} = {}'.format(varID_1, roc_auc_score(
-        #    y_true,
-        #    y_score,
-        #    # average='weighted',
-        #    sample_weight=np.concatenate( (weights_baseline, weights_variation) )
-        #)))
-        # only plot once
-        if i_bs == 0:
-            plotting.plot_output(
-                np.array(pred_baseline).ravel(),
-                np.array(pred_variation).ravel(),
-                varID_0,
-                varID_1,
-                np.array(weights_baseline).ravel(),
-                np.array(weights_variation).ravel(),
-                args.model,
+    
+    experiment_runs = []
+    for i, ((d_0, d_val_0, d_test_0), (d_1, d_val_1, d_test_1)) in enumerate(izip(dataloaders_0, dataloaders_1)):
+        plotting.plot_weights(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, exp=i)
+        plotting.plot_jetn_trkn(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, jetn=0, trkn=0, exp=i)
+        plotting.plot_jetn_trkn(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, jetn=1, trkn=0, exp=i)
+        plotting.plot_ntrack(
+            d_0.dataset, d_val_0.dataset, d_test_0.dataset,
+            d_1.dataset, d_val_1.dataset, d_test_1.dataset,
+            varID_0, varID_1, args.class0, args.class1, exp=i)
+ 
+        experiment_runs.append(
+            run_single_experiment(
+                args, varID_0, varID_1, 
+                dataloader_0=d_0, 
+                dataloader_1=d_1, 
+                dataloader_val_0=d_val_0, 
+                dataloader_val_1=d_val_1, 
+                dataloader_test_0=d_test_0,
+                dataloader_test_1=d_test_1, 
+                experiment_id=i
             )
-        rocs.append(roc_auc_score(
-            y_true,
-            y_score,
-            sample_weight=np.concatenate( (weights_baseline, weights_variation) )
-        ))
+        )
+     
+   #for i, ((d_0, d_val_0, d_test_0), (d_1, d_val_1, d_test_1)) in enumerate(izip(dataloaders_0, dataloaders_1))
+    #]
 
-    # get bootstrap results
-    logger.info('ROC {} = {} +- {}'.format(
-        varID_1,
-        np.mean(rocs),
-        np.std(rocs)/np.sqrt(len(rocs)) # systematic uncertainty due to batching
-    ))
-            
-    # for t in range(args.test_iter):
-    #     plotting.plot_output(
-    #         np.array(pred_baseline[t]).ravel(),
-    #         np.array(pred_variation[t]).ravel(),
-    #         varID_0,
-    #         varID_1,
-    #         np.array(weights_baseline[t]).ravel(),
-    #         np.array(weights_variation[t]).ravel(),
-    #         args.model,
-    #         t
-    #     )
-    #     y_true = np.concatenate((np.zeros(len(pred_baseline[0])), np.ones(len(pred_variation[0]))))
-    #     y_score = np.concatenate((pred_baseline[t], pred_variation[t]))
-    #     logger.debug('ROC iteration {}'.format(t))
-    #     logger.info(roc_auc_score(
-    #         y_true,
-    #         y_score,
-    #         # average='weighted',
-    #         sample_weight=np.concatenate( (weights_baseline[t], weights_variation[t]) )
-    #     ))
+    logger.info('{} experiments finished. Results:'.format(len(experiment_runs)))
+
+    logger.info('DICT:{}'.format(experiment_runs))
+    logger.info('Formatted results:')
+
+    for run in experiment_runs:
+        logger.info('Experiment {experiment_id}: ROC({variation}) = {ROC_AUC}+-{ROC_AUC_Err}'.format(**run))
+
+    
+    
