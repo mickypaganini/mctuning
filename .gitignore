@@ -1,3 +1,9 @@
+#emcas stuff
+*~
+
+# config
+*.yaml
+
 # NN weights
 *.pth
 

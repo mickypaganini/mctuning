@@ -96,7 +96,7 @@ class NTrackModel(nn.Module):
 
 class DoubleLSTM(nn.Module):
 
-    def __init__(self, input_size, output_size, num_layers, dropout,
+    def __init__(self, ntrk_input_size, input_size, output_size, num_layers, dropout,
                  bidirectional, batch_size, tagger_output_size):
         super(DoubleLSTM, self).__init__()
 
@@ -130,10 +130,15 @@ class DoubleLSTM(nn.Module):
         #    out_features= 3 * (output_size * self.num_directions * 2),
         #    kernel_dims=8)
 
+
+        # ntrk
+        self.dense_ntrk0 = nn.Linear(ntrk_input_size, 32)
+        self.dense_ntrk1 = nn.Linear(32, 2)
+
         # output dense layer
         self.dense = nn.Linear(
             # (3 *) because of torch.cat; (* 2) because of 2 streams
-            3 * (output_size * self.num_directions * 2),
+            3 * (output_size * self.num_directions * 2 + 2),
             128 #tagger_output_size#128
         )
         self.dropout = nn.Dropout(p=0.5)
@@ -162,7 +167,7 @@ class DoubleLSTM(nn.Module):
     #             bias.data.zero_()
     #             # bias.data[l.hidden_size:2 * l.hidden_size] = 1.0
 
-    def forward(self, leading_jets, subleading_jets, lengths,
+    def forward(self, ntrk_inputs, leading_jets, subleading_jets, lengths,
                 batch_weights, batch_size):
 
         leading_jets = leading_jets[:, :, [5, 9]] # pt and dr
@@ -220,8 +225,14 @@ class DoubleLSTM(nn.Module):
         h_lead = h_lead[lead_unsort]
         h_sublead = h_sublead[sublead_unsort]
 
-        # concatenate outputs of the 2 LSTMs
-        hidden = torch.cat([h_lead, h_sublead], 1)
+        # ntrk
+        ntrk_inputs = (ntrk_inputs - 50) / 100.
+        ntrk_hidden = F.relu(self.dense_ntrk1(nn.Dropout(p=0.2)(F.relu(self.dense_ntrk0(ntrk_inputs)))))
+
+        # concat rnn outputs with ntrk outputs
+        hidden = torch.cat([h_lead, h_sublead, ntrk_hidden], 1)
+        ## concatenate outputs of the 2 LSTMs
+        # hidden = torch.cat([h_lead, h_sublead], 1)
         # hidden = F.relu(hidden)
 
         batch_mean = batch_weights.mm(hidden).expand(
@@ -267,11 +278,11 @@ class Conv1DModel(nn.Module):
         self.dense = nn.Linear(
             # (3 *) because of torch.cat; (* 2) because of 2 streams
             3 * (rnn_output_size * self.n_directions * 2),
-            32
+            16
         )
         self.dropout = nn.Dropout(p=0.5)
         self.dropout1 = nn.Dropout(p=0.5)
-        self.dense2 = nn.Linear(32, 1)
+        self.dense2 = nn.Linear(16, 1)
 
 
     def forward(self, leading_jets, subleading_jets, batch_weights):
@@ -286,7 +297,7 @@ class Conv1DModel(nn.Module):
         r2 = r2[-self.n_directions:].transpose(0, 1).contiguous().view(batch_size, -1)
         # concat rnn outputs
         hidden = torch.cat([r1, r2], 1)
-        
+
         # batch-level features
         batch_mean = batch_weights.mm(hidden).expand(
             batch_size, hidden.shape[-1])
@@ -299,3 +310,102 @@ class Conv1DModel(nn.Module):
         # fully-connected layers
         outputs = self.dense2(self.dropout1(F.relu(self.dense(self.dropout(all_features)))))
         return outputs
+
+
+class BeefyConv1DModel(nn.Module):
+    def __init__(self, ntrk_input_size, input_size, hidden_size, rnn_output_size, kernel_size,
+                 dropout=0.0, bidirectional=False):
+        super(BeefyConv1DModel, self).__init__()
+
+        # members
+        self.conv1 = nn.Conv1d(input_size, 32, 20)# hidden_size, kernel_size)
+        self.conv2 = nn.Conv1d(input_size, 32, 20)# hidden_size, kernel_size)
+
+        self.conv3 = nn.Conv1d(32, 32, 16)# hidden_size, kernel_size)
+        self.conv4 = nn.Conv1d(32, 32, 16)# hidden_size, kernel_size)
+        
+        self.rnn1 = nn.GRU(
+            input_size=32, # hidden_size
+            hidden_size=48, #rnn_output_size,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=bidirectional
+        )
+        self.rnn2 = nn.GRU(
+            input_size=32, # hidden_size
+            hidden_size=48, #rnn_output_size,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=bidirectional
+        )
+        self.n_directions = 2 if bidirectional else 1
+
+        # ntrk
+        self.dense_ntrk0 = nn.Linear(ntrk_input_size, 32)
+        self.dense_ntrk1 = nn.Linear(32, 2)
+
+        # final FCN
+        self.dense = nn.Linear(
+            # (3 *) because of torch.cat; (* 2) because of 2 streams
+            #3 * (rnn_output_size * self.n_directions * 2),
+            3 * (48 * self.n_directions * 2 + 2), # +2 from ntrk
+            32
+        )
+        self.dropout = nn.Dropout(p=0.4)
+        self.dropout1 = nn.Dropout(p=0.4)
+        self.dense2 = nn.Linear(32, 1)
+
+
+    def forward(self, ntrk_inputs, leading_jets, subleading_jets, batch_weights):
+        batch_size = batch_weights.shape[1]
+        
+        c1 = self.conv1(leading_jets.transpose(1, 2)) # swap seq_length and features
+        c2 = self.conv2(subleading_jets.transpose(1, 2))
+
+        c1 = nn.Dropout(p=0.5)(
+            F.leaky_relu(
+                nn.MaxPool1d(kernel_size=2, stride=2)(c1)))
+        c2 = nn.Dropout(p=0.5)(
+            F.leaky_relu(
+                nn.MaxPool1d(kernel_size=2, stride=2)(c2)))
+
+        c3 = self.conv4(c1)
+        c4 = self.conv4(c2)
+
+        c3 = nn.Dropout(p=0.5)(
+            F.leaky_relu(
+                nn.MaxPool1d(kernel_size=2, stride=2)(c3)))
+        c4 = nn.Dropout(p=0.5)(
+            F.leaky_relu(
+                nn.MaxPool1d(kernel_size=2, stride=2)(c4)))
+        
+        # take the last time step only
+        _, r1 = self.rnn1(c3.transpose(1, 2)) # swap back
+        _, r2 = self.rnn2(c4.transpose(1, 2))
+        r1 = r1[-self.n_directions:].transpose(0, 1).contiguous().view(batch_size, -1) # [b, dir x feats]
+        r2 = r2[-self.n_directions:].transpose(0, 1).contiguous().view(batch_size, -1)
+
+        # ntrk
+        ntrk_inputs = (ntrk_inputs - 50) / 100.
+        ntrk_hidden = F.relu(self.dense_ntrk1(nn.Dropout(p=0.2)(F.relu(self.dense_ntrk0(ntrk_inputs)))))
+
+        # concat rnn outputs with ntrk outputs
+        hidden = torch.cat([r1, r2, ntrk_hidden], 1)
+        hidden = nn.Dropout(p=0.5)(hidden)
+
+        # batch-level features
+        batch_mean = batch_weights.mm(hidden).expand(
+            batch_size, hidden.shape[-1])
+        batch_second_moment = batch_weights.mm(
+            torch.pow(hidden, 2)).expand(batch_size, hidden.shape[-1])
+        batch_std = batch_second_moment - torch.pow(batch_mean, 2)
+        
+        all_features = torch.cat([batch_mean, batch_std, hidden], 1)
+        
+        # fully-connected layers
+        outputs = self.dense2(self.dropout1(F.relu(self.dense(self.dropout(all_features)))))
+        return outputs
+
+
+
+            

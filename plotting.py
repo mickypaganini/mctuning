@@ -10,7 +10,7 @@ matplotlib.rcParams.update({'font.size' : 20})
 
 FEATURES = ['E', 'Et', 'eta', 'm', 'phi', 'pt', 'px', 'py', 'pz', 'deltaR']
 
-def plot_weights(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1):
+def plot_weights(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1, exp=None):
     '''
     '''
     safe_mkdir('plots')
@@ -44,10 +44,11 @@ def plot_weights(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_
     plt.xlabel('Event weight')
     plt.xscale('log')
     plt.yscale('log')
-    plt.savefig(os.path.join('plots','{}_{}_weights.pdf'.format(varID_0, varID_1)))
+    path = '{}_{}_weights.pdf'.format(varID_0, varID_1) if exp is None else '{}_{}_exp{}_weights.pdf'.format(varID_0, varID_1, exp)
+    plt.savefig(os.path.join('plots', path))
     plt.close()
 
-def plot_jetn_trkn(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1, jetn, trkn):
+def plot_jetn_trkn(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1, jetn, trkn, exp=None):
     '''
     '''
     safe_mkdir('plots')
@@ -93,13 +94,14 @@ def plot_jetn_trkn(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varI
         plt.xlabel(label)
         plt.legend(fontsize=15)
 
-        plt.savefig(os.path.join(
-            'plots',
-            'jet{}_trk{}_{}_{}_{}.pdf'.format(jetn, trkn, FEATURES[i], varID_0, varID_1, class0, class1)
-        ))
+        if exp is None:
+            path = 'jet{}_trk{}_{}_{}_{}.pdf'.format(jetn, trkn, FEATURES[i], varID_0, varID_1, class0, class1)
+        else:
+            path = 'jet{}_trk{}_{}_{}_{}_exp{}.pdf'.format(jetn, trkn, FEATURES[i], varID_0, varID_1, class0, class1, exp)
+        plt.savefig(os.path.join('plots', path))
         plt.close()
 
-def plot_ntrack(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1):
+def plot_ntrack(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1, class0, class1, exp=None):
     safe_mkdir('plots')
 
     for jet in range(2):
@@ -119,7 +121,7 @@ def plot_ntrack(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1
 
         _ = plt.hist(d_test_1[:]['nparticles'][:, jet], weights=d_test_1[:]['weights_' + class1],
             histtype='step', bins=bins, normed=True, color='orange', linestyle='dashed',
-            label=r'train - {}'.format(varID_1.replace('_', ' ')))
+            label=r'test - {}'.format(varID_1.replace('_', ' ')))
 
         _ = plt.hist(d_val_0[:]['nparticles'][:, jet], weights=d_val_0[:]['weights_' + class0],
             histtype='stepfilled', bins=bins, normed=True, color='teal', alpha=0.1,
@@ -127,11 +129,15 @@ def plot_ntrack(d_0, d_val_0, d_test_0, d_1, d_val_1, d_test_1, varID_0, varID_1
 
         _ = plt.hist(d_val_1[:]['nparticles'][:, jet], weights=d_val_1[:]['weights_' + class1],
             histtype='stepfilled', bins=bins, normed=True, color='orange', alpha=0.1,
-            label=r'train - {}'.format(varID_1.replace('_', ' ')))
+            label=r'val - {}'.format(varID_1.replace('_', ' ')))
 
         plt.legend(fontsize=15)
         plt.xlabel('Number of tracks')
-        plt.savefig(os.path.join('plots','jet{}_ntracks_{}_{}.pdf'.format(jet, varID_0, varID_1)))
+        if exp is None:
+            path = 'jet{}_ntracks_{}_{}.pdf'.format(jet, varID_0, varID_1)
+        else:
+            path = 'jet{}_ntracks_{}_{}_exp{}.pdf'.format(jet, varID_0, varID_1, exp)
+        plt.savefig(os.path.join('plots', path))
         plt.close()
 
 def plot_batch_features(features_baseline, features_variation, varID_0, varID_1, weights_baseline, weights_variation, model_name):
