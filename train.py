@@ -107,11 +107,12 @@ def predict(model, data, batch_size, classname, volatile):
         predictions = model(inputs, batch_weights, batch_size)#)#.data.numpy()
 
     elif isinstance(model, DoubleLSTM):
+        ntrk_inputs = Variable(data['nparticles'].type(customFloatTensor), volatile=volatile)
         leading_input = Variable(data['leading_jet'].type(customFloatTensor), volatile=volatile)
         subleading_input = Variable(data['subleading_jet'].type(customFloatTensor), volatile=volatile)
         # unsorted_lengths = Variable(data['unsorted_lengths'].type(customLongTensor), volatile=volatile)
         unsorted_lengths = data['unsorted_lengths'].type(customLongTensor)
-        predictions = model(leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
+        predictions = model(ntrk_inputs, leading_input, subleading_input, unsorted_lengths, batch_weights, batch_size)#)#.data.numpy()
     
     elif isinstance(model, BeefyConv1DModel):
         ntrk_inputs = Variable(data['nparticles'].type(customFloatTensor), volatile=volatile)
@@ -389,7 +390,8 @@ def run_single_experiment(args, varID_0, varID_1, dataloader_0, dataloader_1,
         logger = logger.getChild('experiment_id={}'.format(experiment_id))
     # initialize model
     if args.model == 'rnn': 
-        model = DoubleLSTM(input_size=2, #10
+        model = DoubleLSTM(ntrk_input_size=2,
+                           input_size=2, #10
                            output_size=10,
                            num_layers=1,
                            dropout=0.3,

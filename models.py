@@ -96,7 +96,7 @@ class NTrackModel(nn.Module):
 
 class DoubleLSTM(nn.Module):
 
-    def __init__(self, input_size, output_size, num_layers, dropout,
+    def __init__(self, ntrk_input_size, input_size, output_size, num_layers, dropout,
                  bidirectional, batch_size, tagger_output_size):
         super(DoubleLSTM, self).__init__()
 
@@ -130,10 +130,15 @@ class DoubleLSTM(nn.Module):
         #    out_features= 3 * (output_size * self.num_directions * 2),
         #    kernel_dims=8)
 
+
+        # ntrk
+        self.dense_ntrk0 = nn.Linear(ntrk_input_size, 32)
+        self.dense_ntrk1 = nn.Linear(32, 2)
+
         # output dense layer
         self.dense = nn.Linear(
             # (3 *) because of torch.cat; (* 2) because of 2 streams
-            3 * (output_size * self.num_directions * 2),
+            3 * (output_size * self.num_directions * 2 + 2),
             128 #tagger_output_size#128
         )
         self.dropout = nn.Dropout(p=0.5)
@@ -162,7 +167,7 @@ class DoubleLSTM(nn.Module):
     #             bias.data.zero_()
     #             # bias.data[l.hidden_size:2 * l.hidden_size] = 1.0
 
-    def forward(self, leading_jets, subleading_jets, lengths,
+    def forward(self, ntrk_inputs, leading_jets, subleading_jets, lengths,
                 batch_weights, batch_size):
 
         leading_jets = leading_jets[:, :, [5, 9]] # pt and dr
@@ -220,8 +225,14 @@ class DoubleLSTM(nn.Module):
         h_lead = h_lead[lead_unsort]
         h_sublead = h_sublead[sublead_unsort]
 
-        # concatenate outputs of the 2 LSTMs
-        hidden = torch.cat([h_lead, h_sublead], 1)
+        # ntrk
+        ntrk_inputs = (ntrk_inputs - 50) / 100.
+        ntrk_hidden = F.relu(self.dense_ntrk1(nn.Dropout(p=0.2)(F.relu(self.dense_ntrk0(ntrk_inputs)))))
+
+        # concat rnn outputs with ntrk outputs
+        hidden = torch.cat([h_lead, h_sublead, ntrk_hidden], 1)
+        ## concatenate outputs of the 2 LSTMs
+        # hidden = torch.cat([h_lead, h_sublead], 1)
         # hidden = F.relu(hidden)
 
         batch_mean = batch_weights.mm(hidden).expand(
