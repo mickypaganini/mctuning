@@ -19,11 +19,7 @@ from tqdm import tqdm
 from itertools import izip
 from joblib import Parallel, delayed
 
-<<<<<<< HEAD
-from dataprep import load_data
-=======
 from dataprep import load_data, make_cv_dataloaders, DijetDataset
->>>>>>> 7b91102dcb82994bd5ef71882ea0f2a2f4b14d92
 from models import DoubleLSTM, NTrackModel, BeefyConv1DModel
 from utils import configure_logging, safe_mkdir
 import plotting
