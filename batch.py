@@ -13,13 +13,15 @@ import sys
 TASKS = [
 #    "python train.py test.yaml Baseline test.yaml fsr{fsr} --ntrain 100000 --ntest 100000 --nval 100000 --model rnn --patience 10 --nepochs 1000 --lr 0.001 &> w_rnn_fsr{fsr}.log".format(fsr=option) for option in ['05', '07', '09', '11', '13', '15', '17', '19', '20']
 ] + [
-    "python train.py test.yaml Baseline fsr12.yaml Baseline --ntrain 100000 --ntest 100000 --nval 100000 --model rnn --patience 10 --nepochs 1000 --lr 0.001 --checkpoint checkpoint_{t}  &> uw_rnn_fsr12_{t}.log".format(t=option) for option in range(12)
+#    "python train.py test.yaml Baseline fsr12.yaml Baseline --ntrain 100000 --ntest 100000 --nval 100000 --model rnn --patience 10 --nepochs 1000 --lr 0.001 --checkpoint checkpoint_{t}  &> uw_rnn_fsr12_{t}.log".format(t=option) for option in range(12)
+"python train.py test.yaml Baseline all_fsrmu.yaml fsr{fsr} --ntrain 300000 --ntest 300000 --nval 300000 --model 1dconv --patience 25 --nepochs 1000 --l\
+r 0.0005 --monitor val_loss --checkpoint checkpoint_cnnntrk_256_dot0005_3x300k --nfolds 10  > logs/w_cnnntk_fsr{fsr}_10fold_256_dot0005_3x300k.log 2>&1".format(fsr=fsr) for fsr in ['08', '11']
 ]
 # Define which GPUs to consider
-DEVICE_NUMBERS = [0, 1, 2, 3]
+DEVICE_NUMBERS = [0, 2]
 
 # Define the number of processes that can run on a gpu concurrently
-NUM_PROC_MAX = 3
+NUM_PROC_MAX = 1
 
 # Don't Modify
 #########################

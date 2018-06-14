@@ -10,6 +10,7 @@ Author: Michela Paganini (michela.paganini@yale.edu)
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
 import numpy as np
 import operator
 import os
@@ -31,6 +32,16 @@ import multiprocessing
 # logging
 configure_logging()
 logger = logging.getLogger("Data Preparation")
+
+def delayed_iter(it, time_delay=2):
+    """
+    Can't believe this is necessary, but Pythia doesnt do PID / thread ID 
+    unique seeds, so we need to delay launching.
+    """
+    import time
+    for el in it:
+        time.sleep(time_delay)
+        yield el
 
 def deltaR(eta1, eta2, phi1, phi2):
     import math
@@ -247,12 +258,22 @@ class DijetDataset(Dataset):
         dicts = [d.to_dict() for d in sequence]
         output_dict = {
             field : np.concatenate(tuple(dic[field] for dic in dicts), axis=0)
-                for field in dicts[0].keys() if dicts[0][field].shape
+                for field in dicts[0].keys() if (hasattr(dicts[0][field], 'shape') and dicts[0][field].shape)
         }
         output_dict.update({
-            field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not dicts[0][field].shape
+            field : sum(dic[field] for dic in dicts) for field in dicts[0].keys() if not (hasattr(dicts[0][field], 'shape') and dicts[0][field].shape)
         })
         return DijetDataset.from_dict(output_dict)
+
+    def take_slice(self, indices):
+        indices = np.array(indices)
+        #d = self.to_dict()
+        d = {k : self.__dict__[k][indices] for k in self.__dict__ if k != 'nevents'}
+        #for k in d:
+        #    if k != 'nevents':
+        #        d[k] = d[k][indices]
+        d['nevents'] = len(indices)
+        return self.__class__.from_dict(d)
         
     def __len__(self):
         return self.nevents
@@ -321,20 +342,86 @@ def load_data(config, variation, ntrain, nval, ntest, maxlen, min_lead_pt, batch
         else:
             ncpu = multiprocessing.cpu_count() - 1 
             dataset_list = Parallel(n_jobs=ncpu, verbose=True)(delayed(DijetDataset)(
-                temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) for _ in range(ncpu))
+                temp_filepath, nevents=nevents/ncpu, max_len=maxlen, min_lead_pt=min_lead_pt) 
+                for _ in delayed_iter(range(ncpu), time_delay=2.0)
+            )
             d = DijetDataset.concat(dataset_list)
             #pickle.dump(d.to_dict(), open(dataset_string, 'wb'), protocol=pickle.HIGHEST_PROTOCOL)
             with h5py.File(dataset_string) as f:
                 for key, value in d.to_dict().iteritems():
                     f[key] = value
-        pin_memory = True if torch.cuda.is_available() else False
+        # pin_memory = True if torch.cuda.is_available() else False
+        pin_memory = False
 
         # return a PyTorch DataLoader from the DijetDataset above
         return DataLoader(d,
                     batch_size=batch_size,
                     shuffle=True,
-                    num_workers=6,
-                    # num_workers=0,
+                    # num_workers=6,
+                    num_workers=0,
                     pin_memory=pin_memory) # for GPU
 
     return _load_data('train', ntrain), _load_data('val', nval), _load_data('test', ntest), varID
+
+
+
+def make_cv_dataloaders(dataset, batchsize=128, train_size=0.7, nfolds=10, 
+                        pin_memory=False, num_workers=6):
+    """Takes a dataset and returns an iterator of tuples of dataloaders:
+
+    [
+        (train_dataloader, val_dataloader, test_dataloader), 
+        (train_dataloader, val_dataloader, test_dataloader), 
+        ...
+    ]
+
+    where each tuple is a round of crossvalidation. The number of triplets
+    returned is equal to the nfolds passed in
+
+    """
+    from sklearn.model_selection import KFold, train_test_split
+
+    class ShapeProxy(object):
+        """
+        Make a dummy shape so sklearn doesnt get grumpy
+        """
+        def __init__(self, shape=None):
+            self.shape = shape
+
+        def __getitem__(self, *args):
+            pass
+
+    kf = KFold(nfolds, shuffle=True)
+    shape = ShapeProxy((len(dataset), 1))
+    dataloaders = []
+    
+    for train_val_idx, test_idx in kf.split(shape):
+        train_idx, val_idx = train_test_split(train_val_idx, 
+                                              train_size=train_size)
+        dataloader = DataLoader(
+            dataset.take_slice(train_idx),
+            batch_size=batchsize,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+
+        dataloader_val = DataLoader(
+            dataset.take_slice(val_idx),
+            batch_size=batchsize,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+
+        dataloader_test = DataLoader(
+            dataset.take_slice(test_idx),
+            batch_size=batchsize,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+        # dataloaders.append((dataloader, dataloader_val, dataloader_test))
+        yield (dataloader, dataloader_val, dataloader_test)
+
+    # return dataloaders
