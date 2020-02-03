@@ -7,4 +7,4 @@ numpythia==0.3.3
 pyjet==1.0.1
 tqdm==4.19.6
 scikit_learn==0.19.1
-PyYAML==3.12
+PyYAML==5.1
